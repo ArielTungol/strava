@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart' as geolocator;  // ADD THIS PREFIX
+import 'package:geolocator/geolocator.dart' as geolocator;
 
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
@@ -33,6 +33,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   bool _isSelectingDestination = false;
   bool _isNavigating = false;
   String _selectedActivity = 'running';
+  bool _locationPermissionGranted = false;
+  bool _isLoadingLocation = true;
 
   double _currentSpeed = 0;
   double _currentDistance = 0;
@@ -54,8 +56,66 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    _currentPosition = widget.currentLocation;
-    _startLocationUpdates();
+    _initializeLocation();
+  }
+
+  Future<void> _initializeLocation() async {
+    setState(() {
+      _isLoadingLocation = true;
+    });
+
+    // First, check and request permissions
+    bool permissionGranted = await _locationService.checkAndRequestPermission();
+
+    if (permissionGranted) {
+      // Try to get current location
+      LatLng? location = await _locationService.getCurrentLocation();
+
+      setState(() {
+        _currentPosition = location ?? widget.currentLocation;
+        _locationPermissionGranted = true;
+        _isLoadingLocation = false;
+      });
+
+      // Center map on location if we have it
+      if (_currentPosition != null) {
+        _mapController.move(_currentPosition!, 15);
+      }
+
+      // Start location updates
+      _startLocationUpdates();
+    } else {
+      setState(() {
+        _locationPermissionGranted = false;
+        _isLoadingLocation = false;
+      });
+
+      _showPermissionDialog();
+    }
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Location Permission Required'),
+          content: const Text(
+              'Strava needs access to your location to track your runs, walks, and cycling activities. Please enable location permissions in settings.'
+          ),
+          actions: [
+            TextButton(
+              child: const Text('OK'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                geolocator.Geolocator.openLocationSettings();
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _startLocationUpdates() {
@@ -63,13 +123,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       onPositionChanged: (position) {
         setState(() {
           _currentPosition = position;
-          // USE THE PREFIX HERE
-          _currentSpeed = geolocator.Geolocator.distanceBetween(
-            _currentPosition?.latitude ?? 0,
-            _currentPosition?.longitude ?? 0,
-            position.latitude,
-            position.longitude,
-          ) / 1;
 
           if (_isTracking) {
             _trackedRoute.add(position);
@@ -223,10 +276,69 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         currentType = ActivityType.running;
     }
 
+    if (_isLoadingLocation) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Getting your location...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (!_locationPermissionGranted) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Track Activity'),
+          backgroundColor: Colors.blue,
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.location_off,
+                  size: 80,
+                  color: Colors.red,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Location Permission Required',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Strava needs access to your location to track your activities. Please enable location permissions in settings.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    geolocator.Geolocator.openLocationSettings();
+                  },
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Track Activity'),
-        backgroundColor: _activityColors[currentType]?.withOpacity(0.9),
+        backgroundColor: _activityColors[currentType]?.withValues(alpha: 0.9),
         foregroundColor: Colors.white,
         actions: [
           if (!_isTracking)
@@ -274,6 +386,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       ),
       body: Stack(
         children: [
+          // Map
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
@@ -287,18 +400,22 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             children: [
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.trackmaster',
+                userAgentPackageName: 'com.example.strava',
               ),
+
+              // Route to destination
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _routePoints,
-                      color: Colors.blue.withOpacity(0.5),
+                      color: Colors.blue.withValues(alpha: 0.5),
                       strokeWidth: 4,
                     ),
                   ],
                 ),
+
+              // Tracked route
               if (_trackedRoute.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -309,6 +426,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     ),
                   ],
                 ),
+
+              // Current position marker
               MarkerLayer(
                 markers: [
                   if (_currentPosition != null)
@@ -326,7 +445,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
+                              color: Colors.black.withValues(alpha: 0.2),
                               blurRadius: 5,
                               spreadRadius: 1,
                             ),
@@ -341,6 +460,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         ),
                       ),
                     ),
+
+                  // Destination marker
                   if (_destination != null)
                     Marker(
                       point: _destination!,
@@ -356,6 +477,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ],
           ),
+
+          // Controls overlay
           Positioned(
             top: 16,
             right: 16,
@@ -367,7 +490,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -404,7 +527,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -423,7 +546,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
+                          color: Colors.black.withValues(alpha: 0.1),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
@@ -451,7 +574,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
+                          color: Colors.black.withValues(alpha: 0.1),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
@@ -471,6 +594,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ],
             ),
           ),
+
+          // Activity summary during tracking
           if (_isTracking)
             Positioned(
               top: 16,
@@ -483,6 +608,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 type: currentType,
               ),
             ),
+
+          // Start/Stop buttons
           Positioned(
             bottom: 32,
             left: 0,
@@ -495,7 +622,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   borderRadius: BorderRadius.circular(30),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
+                      color: Colors.black.withValues(alpha: 0.2),
                       blurRadius: 10,
                       offset: const Offset(0, 2),
                     ),

@@ -32,9 +32,6 @@ target 'Runner' do
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-
-  # REMOVED: pod 'geolocator_apple' - this was causing duplicate dependency error
-  # The geolocator plugin is automatically included by flutter_install_all_ios_pods
 end
 
 post_install do |installer|
@@ -45,15 +42,12 @@ post_install do |installer|
     target.build_configurations.each do |config|
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
-        'PERMISSION_LOCATION=1',  # Enable location permissions for geolocator
-        'PERMISSION_LOCATION_ALWAYS=1',  # Enable always location permission
-        'PERMISSION_LOCATION_WHEN_IN_USE=1',  # Enable when-in-use location permission
+        'PERMISSION_LOCATION=1',
+        'PERMISSION_LOCATION_ALWAYS=1',
+        'PERMISSION_LOCATION_WHEN_IN_USE=1',
       ]
 
-      # Set minimum iOS version for all targets
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-
-      # Enable Swift support
       config.build_settings['SWIFT_VERSION'] = '5.0'
     end
   end

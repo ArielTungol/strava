@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 
@@ -17,7 +18,7 @@ void main() async {
     print("Running on web - permissions handled by browser");
   }
 
-  // Initialize Hive with a path for web
+  // Initialize Hive
   await Hive.initFlutter();
 
   // Register adapters
@@ -35,6 +36,7 @@ Future<void> _requestPermissions() async {
   if (kIsWeb) return;
 
   try {
+    // Request all location permissions
     await [
       Permission.location,
       Permission.locationWhenInUse,
@@ -51,7 +53,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TrackMaster',
+      title: 'Strava',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,
