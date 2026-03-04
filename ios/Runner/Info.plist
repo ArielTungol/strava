@@ -45,5 +45,26 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- Location Permission Descriptions - Required for Strava tracking -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Strava needs access to your location to track your runs, walks, and cycling routes in real-time on the map</string>
+
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Strava needs access to your location to track your activities even when the app is in the background, so you can record your workouts without keeping the app open</string>
+
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Strava needs access to your location to continuously track your runs, walks, and cycling activities</string>
+
+	<!-- Background Modes - Allows tracking when app is in background -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+	</array>
+
+	<!-- Optional: Add these if you want to use Apple Maps or other features -->
+	<key>NSMotionUsageDescription</key>
+	<string>Strava uses motion data to enhance activity tracking accuracy</string>
 </dict>
 </plist>
