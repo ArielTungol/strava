@@ -1,0 +1,51 @@
+workflows:
+  ios-free-build:
+    name: iOS Free Accounts Build
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Setup Dependencies
+        script: |
+          flutter pub get
+          flutter precache --ios
+      - name: Fix and Install Pods
+        script: |
+          cd ios
+          # Burahin ang maling workspace file na nakita sa images
+          rm -rf Runner.xcodeproj/project.xcworkspace
+          
+          # Clean pods at symlinks para sa fresh start
+          rm -rf Pods
+          rm -rf Podfile.lock
+          rm -rf .symlinks
+          
+          # I-link uli ang plugins (lalo na ang geocoding_ios)
+          flutter pub get
+          
+          # Install CocoaPods
+          pod install --repo-update
+          cd ..
+      - name: Build and Package IPA
+        script: |
+          # 1. Simulan ang main build process
+          flutter build ios --release --no-codesign
+
+          # 2. Pumunta sa output directory kung nasaan ang app
+          cd build/ios/iphoneos
+          
+          # 3. Siguraduhin na nage-exist ang Runner.app bago i-zip
+          if [ -d "Runner.app" ]; then
+            mkdir -p Payload
+            cp -r Runner.app Payload/
+            # I-zip ang Payload folder sa root directory para makita ng artifacts
+            zip -r $FCI_BUILD_DIR/unsigned_app.ipa Payload
+            echo "Build successful! IPA is ready."
+          else
+            echo "Error: Runner.app not found. Build failed to produce an output."
+            exit 1
+          fi
+    artifacts:
+      - "*.ipa"
