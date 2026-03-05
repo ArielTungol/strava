@@ -29,8 +29,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   LatLng? _previousPosition;
   double _heading = 0.0;
   LatLng? _destination;
-  List<LatLng> _routePoints = [];
-  List<LatLng> _trackedRoute = [];
+  List<LatLng> _fullRoute = []; // Complete route from start to destination
+  List<LatLng> _remainingRoute = []; // Route that hasn't been traveled yet
+  List<LatLng> _trackedRoute = []; // Route that has been traveled
 
   bool _isTracking = false;
   bool _isSelectingDestination = false;
@@ -42,10 +43,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Arrival detection
   bool _hasArrived = false;
-  double _arrivalThreshold = 50.0;
+  double _arrivalThreshold = 20.0;
   bool _arrivalNotified = false;
 
-  // Live tracking metrics - ALL UPDATE INSTANTLY
+  // Live tracking metrics
   double _currentSpeed = 0;
   double _currentDistance = 0;
   double _currentDuration = 0;
@@ -257,8 +258,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               _previousPosition = _currentPosition;
             }
 
+            LatLng oldPosition = _currentPosition ?? position;
             _currentPosition = position;
 
+            // Check if arrived at destination
             if (_destination != null && !_hasArrived) {
               _checkArrival();
             }
@@ -266,7 +269,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             if (_isTracking) {
               _trackedRoute.add(position);
 
-              // INSTANT DISTANCE UPDATE - NO THRESHOLD
+              // Update remaining route - remove traveled portion
+              if (_fullRoute.isNotEmpty) {
+                _updateRemainingRoute(position);
+              }
+
               if (_lastPositionForDistance != null) {
                 double segmentDistance = geolocator.Geolocator.distanceBetween(
                   _lastPositionForDistance!.latitude,
@@ -275,10 +282,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   position.longitude,
                 );
 
-                // Update distance immediately with ANY movement
                 _currentDistance += segmentDistance;
 
-                // INSTANT SPEED UPDATE
                 if (_lastTimeForSpeed != null) {
                   Duration timeDiff = DateTime.now().difference(_lastTimeForSpeed!);
                   if (timeDiff.inMilliseconds > 0) {
@@ -325,6 +330,96 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  void _updateRemainingRoute(LatLng currentPosition) {
+    if (_fullRoute.isEmpty || _destination == null) return;
+
+    // Find the closest point on the route to current position
+    int closestIndex = 0;
+    double minDistance = double.infinity;
+
+    for (int i = 0; i < _fullRoute.length; i++) {
+      double distance = geolocator.Geolocator.distanceBetween(
+        currentPosition.latitude,
+        currentPosition.longitude,
+        _fullRoute[i].latitude,
+        _fullRoute[i].longitude,
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = i;
+      }
+    }
+
+    // If we're close to the route, update remaining route
+    if (minDistance < 50) { // Within 50 meters of the route
+      _remainingRoute = _fullRoute.sublist(closestIndex);
+    }
+  }
+
+  void _checkArrival() {
+    if (_destination == null || _currentPosition == null || _hasArrived) return;
+
+    double distanceToDestination = geolocator.Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      _destination!.latitude,
+      _destination!.longitude,
+    );
+
+    print('📍 Distance to destination: ${distanceToDestination.toStringAsFixed(1)}m');
+
+    if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
+      _handleArrival();
+    }
+  }
+
+  void _handleArrival() {
+    setState(() {
+      _hasArrived = true;
+      _arrivalNotified = true;
+    });
+
+    if (_isTracking) {
+      _autoStopTracking();
+    } else {
+      _showArrivalDialog();
+    }
+  }
+
+  void _autoStopTracking() async {
+    print('📍 AUTO-STOP: Reached destination, finishing activity...');
+
+    _stopwatch.stop();
+    _timer?.cancel();
+
+    await _activityService.finishActivity();
+
+    _showArrivalDialog();
+
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (mounted) {
+      _showActivitySummary();
+    }
+
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() {
+          _isTracking = false;
+          _isNavigating = false;
+          _destination = null;
+          _fullRoute = [];
+          _remainingRoute = [];
+          _hasArrived = false;
+          _arrivalNotified = false;
+          _lastPositionForDistance = null;
+          _lastTimeForSpeed = null;
+        });
+      }
+    });
+  }
+
   void _startTracking() {
     ActivityType type;
     switch (_selectedActivity) {
@@ -347,7 +442,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       destination: _destination,
     );
 
-    // RESET ALL METRICS TO ZERO
     setState(() {
       _isTracking = true;
       _trackedRoute = [];
@@ -361,12 +455,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
+
+      // Initialize remaining route as full route when starting
+      if (_fullRoute.isNotEmpty) {
+        _remainingRoute = List.from(_fullRoute);
+      }
     });
 
     _stopwatch.reset();
     _stopwatch.start();
 
-    // UPDATE METRICS EVERY 100ms FOR SMOOTH DISPLAY
     _timer = Timer.periodic(const Duration(milliseconds: UPDATE_INTERVAL_MS), (timer) {
       if (_isTracking && mounted) {
         setState(() {
@@ -389,34 +487,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
   }
 
-  void _checkArrival() {
-    if (_destination == null || _currentPosition == null || _hasArrived) return;
-
-    double distanceToDestination = geolocator.Geolocator.distanceBetween(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      _destination!.latitude,
-      _destination!.longitude,
-    );
-
-    if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
-      _handleArrival();
-    }
-  }
-
-  void _handleArrival() {
-    setState(() {
-      _hasArrived = true;
-      _arrivalNotified = true;
-    });
-
-    _showArrivalDialog();
-
-    if (_isNavigating && !_isTracking) {
-      _showStartTrackingDialog();
-    }
-  }
-
   void _stopTracking() async {
     _stopwatch.stop();
     _timer?.cancel();
@@ -427,7 +497,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _isTracking = false;
       _isNavigating = false;
       _destination = null;
-      _routePoints = [];
+      _fullRoute = [];
+      _remainingRoute = [];
       _hasArrived = false;
       _arrivalNotified = false;
       _lastPositionForDistance = null;
@@ -448,7 +519,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _isTracking = false;
       _isNavigating = false;
       _destination = null;
-      _routePoints = [];
+      _fullRoute = [];
+      _remainingRoute = [];
       _trackedRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
@@ -466,6 +538,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   void _showActivitySummary() {
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
           title: const Text('Activity Completed! 🎉'),
@@ -486,7 +559,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           actions: [
             TextButton(
               child: const Text('OK'),
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
             ),
           ],
         );
@@ -581,7 +656,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     final route = await OSRMService.getRoute(_currentPosition!, _destination!);
     setState(() {
-      _routePoints = route;
+      _fullRoute = route;
+      _remainingRoute = List.from(route); // Initially, all route is remaining
     });
 
     if (route.isNotEmpty && mounted) {
@@ -675,18 +751,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 Navigator.of(context).pop();
               },
             ),
-            if (!_isTracking)
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  _startTracking();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Start Activity'),
-              ),
           ],
         );
       },
@@ -709,7 +773,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 Navigator.of(context).pop();
                 setState(() {
                   _destination = null;
-                  _routePoints = [];
+                  _fullRoute = [];
+                  _remainingRoute = [];
                   _isNavigating = false;
                   _hasArrived = false;
                   _arrivalNotified = false;
@@ -986,19 +1051,31 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // REMOVED AttributionWidget - this was causing the error
-
-              if (_routePoints.isNotEmpty)
+              // Full route (faint blue) - shows where you need to go
+              if (_fullRoute.isNotEmpty && !_hasArrived)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: _routePoints,
-                      color: Colors.blue.withValues(alpha: 0.5),
+                      points: _fullRoute,
+                      color: Colors.blue.withValues(alpha: 0.2),
                       strokeWidth: 4,
                     ),
                   ],
                 ),
 
+              // Remaining route (bright blue) - shows what's left
+              if (_remainingRoute.isNotEmpty && !_hasArrived && _isTracking)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _remainingRoute,
+                      color: Colors.blue.withValues(alpha: 0.8),
+                      strokeWidth: 6,
+                    ),
+                  ],
+                ),
+
+              // Tracked route (activity color) - shows where you've been
               if (_trackedRoute.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -1100,7 +1177,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ],
           ),
 
-          // Live Tracking Stats Card - UPDATES INSTANTLY
+          // Live Tracking Stats Card
           if (_isTracking)
             Positioned(
               top: 16,
@@ -1346,7 +1423,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       onPressed: () {
                         setState(() {
                           _destination = null;
-                          _routePoints = [];
+                          _fullRoute = [];
+                          _remainingRoute = [];
                           _isNavigating = false;
                           _hasArrived = false;
                           _arrivalNotified = false;
