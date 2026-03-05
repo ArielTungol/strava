@@ -7,8 +7,6 @@ class OSRMService {
 
   static Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
     try {
-      print('📍 OSRM: Getting route from $start to $end');
-
       final response = await http.get(
         Uri.parse(
             '$baseUrl/route/v1/driving/'
@@ -17,8 +15,6 @@ class OSRMService {
                 '?overview=full&geometries=geojson&steps=true'
         ),
       );
-
-      print('📍 OSRM Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -36,33 +32,13 @@ class OSRMService {
 
           print('✅ OSRM route found with ${points.length} points');
           return points;
-        } else {
-          print('❌ OSRM error: ${data['code']}');
         }
-      } else {
-        print('❌ OSRM HTTP error: ${response.statusCode}');
       }
     } catch (e) {
       print('❌ OSRM routing error: $e');
     }
 
-    // Return a simple straight line as fallback
-    return _getSimplePath(start, end);
-  }
-
-  static List<LatLng> _getSimplePath(LatLng start, LatLng end) {
-    print('📍 Using fallback simple path');
-    final path = <LatLng>[start];
-    double latStep = (end.latitude - start.latitude) / 20;
-    double lngStep = (end.longitude - start.longitude) / 20;
-
-    for (int i = 1; i <= 20; i++) {
-      path.add(LatLng(
-        start.latitude + (latStep * i),
-        start.longitude + (lngStep * i),
-      ));
-    }
-    return path;
+    return [];
   }
 
   static Future<Map<String, dynamic>> getRouteDetails(LatLng start, LatLng end) async {
@@ -103,7 +79,7 @@ class OSRMService {
     }
 
     return {
-      'route': _getSimplePath(start, end),
+      'route': [],
       'distance': 0,
       'duration': 0,
     };
