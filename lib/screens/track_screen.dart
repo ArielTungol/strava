@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
@@ -25,6 +26,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   final ActivityService _activityService = ActivityService();
 
   LatLng? _currentPosition;
+  LatLng? _previousPosition;
+  double _heading = 0.0;
   LatLng? _destination;
   List<LatLng> _routePoints = [];
   List<LatLng> _trackedRoute = [];
@@ -39,10 +42,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Arrival detection
   bool _hasArrived = false;
-  double _arrivalThreshold = 50.0; // meters
+  double _arrivalThreshold = 50.0;
   bool _arrivalNotified = false;
 
-  // Live tracking metrics
+  // Live tracking metrics - ALL UPDATE INSTANTLY
   double _currentSpeed = 0;
   double _currentDistance = 0;
   double _currentDuration = 0;
@@ -50,10 +53,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   double _averageSpeed = 0;
   String _formattedPace = "--:--";
 
+  // For tracking movement
+  LatLng? _lastPositionForDistance;
+  DateTime? _lastTimeForSpeed;
+
   Timer? _timer;
   Stopwatch _stopwatch = Stopwatch();
 
+  // Animation for smooth marker movement
+  AnimationController? _markerAnimationController;
+  LatLng? _targetPosition;
+  LatLng? _currentAnimatedPosition;
+
   static const int UPDATE_INTERVAL_MS = 100;
+  static const int MARKER_ANIMATION_DURATION_MS = 500;
 
   final Map<ActivityType, IconData> _activityIcons = {
     ActivityType.running: Icons.directions_run,
@@ -70,10 +83,66 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    // FIX: Ensure widgets are built before location starts
+    _initializeMarkerAnimation();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeLocation();
     });
+  }
+
+  void _initializeMarkerAnimation() {
+    _markerAnimationController = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: MARKER_ANIMATION_DURATION_MS),
+    );
+  }
+
+  double _calculateBearing(LatLng start, LatLng end) {
+    double lat1 = start.latitude * pi / 180;
+    double lon1 = start.longitude * pi / 180;
+    double lat2 = end.latitude * pi / 180;
+    double lon2 = end.longitude * pi / 180;
+
+    double y = sin(lon2 - lon1) * cos(lat2);
+    double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(lon2 - lon1);
+    double bearing = atan2(y, x) * 180 / pi;
+
+    return (bearing + 360) % 360;
+  }
+
+  void _animateMarkerToNewPosition(LatLng newPosition) {
+    if (_currentAnimatedPosition == null) {
+      setState(() {
+        _currentAnimatedPosition = newPosition;
+      });
+      return;
+    }
+
+    _targetPosition = newPosition;
+
+    if (_currentAnimatedPosition != null) {
+      _heading = _calculateBearing(_currentAnimatedPosition!, newPosition);
+    }
+
+    _markerAnimationController?.stop();
+    _markerAnimationController?.reset();
+
+    final startLat = _currentAnimatedPosition!.latitude;
+    final startLng = _currentAnimatedPosition!.longitude;
+    final endLat = newPosition.latitude;
+    final endLng = newPosition.longitude;
+
+    _markerAnimationController?.addListener(() {
+      if (!mounted) return;
+      final double t = _markerAnimationController!.value;
+      final double interpolatedLat = startLat + (endLat - startLat) * t;
+      final double interpolatedLng = startLng + (endLng - startLng) * t;
+
+      setState(() {
+        _currentAnimatedPosition = LatLng(interpolatedLat, interpolatedLng);
+      });
+    });
+
+    _markerAnimationController?.forward();
   }
 
   Future<void> _initializeLocation() async {
@@ -83,7 +152,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
 
     try {
-      // Step 1: Check if location services are enabled
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         setState(() {
@@ -94,11 +162,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         return;
       }
 
-      // Step 2: Check and request permissions
       geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
 
       if (permission == geolocator.LocationPermission.denied) {
-        // Request permission
         permission = await geolocator.Geolocator.requestPermission();
         if (permission == geolocator.LocationPermission.denied) {
           setState(() {
@@ -119,7 +185,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         return;
       }
 
-      // Step 3: Try to get current location with multiple attempts
       print('📍 Attempting to get current location...');
 
       geolocator.Position? position;
@@ -143,20 +208,21 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       }
 
       if (position != null) {
+        final initialPosition = LatLng(position!.latitude, position!.longitude);
         setState(() {
-          _currentPosition = LatLng(position!.latitude, position!.longitude);
+          _currentPosition = initialPosition;
+          _currentAnimatedPosition = initialPosition;
+          _previousPosition = initialPosition;
           _locationPermissionGranted = true;
           _isLoadingLocation = false;
         });
 
         print('📍 Current position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
 
-        // FIX: Add delay to ensure map controller is ready
         Future.delayed(const Duration(milliseconds: 100), () {
           _mapController.move(_currentPosition!, 15);
         });
 
-        // Start location updates
         _startLocationUpdates();
       } else {
         setState(() {
@@ -177,15 +243,22 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _startLocationUpdates() {
+    print('📍 Starting location updates...');
+
     try {
       _locationService.startTracking(
         onPositionChanged: (position) {
           if (!mounted) return;
 
+          print('📍 Position update received: $position');
+
           setState(() {
+            if (_currentPosition != null) {
+              _previousPosition = _currentPosition;
+            }
+
             _currentPosition = position;
 
-            // Check if arrived at destination
             if (_destination != null && !_hasArrived) {
               _checkArrival();
             }
@@ -193,34 +266,34 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             if (_isTracking) {
               _trackedRoute.add(position);
 
-              if (_trackedRoute.length >= 2) {
-                LatLng lastPoint = _trackedRoute[_trackedRoute.length - 2];
+              // INSTANT DISTANCE UPDATE - NO THRESHOLD
+              if (_lastPositionForDistance != null) {
                 double segmentDistance = geolocator.Geolocator.distanceBetween(
-                  lastPoint.latitude,
-                  lastPoint.longitude,
+                  _lastPositionForDistance!.latitude,
+                  _lastPositionForDistance!.longitude,
                   position.latitude,
                   position.longitude,
                 );
 
+                // Update distance immediately with ANY movement
                 _currentDistance += segmentDistance;
 
-                if (_currentSpeed > _maxSpeed) {
-                  _maxSpeed = _currentSpeed;
-                }
+                // INSTANT SPEED UPDATE
+                if (_lastTimeForSpeed != null) {
+                  Duration timeDiff = DateTime.now().difference(_lastTimeForSpeed!);
+                  if (timeDiff.inMilliseconds > 0) {
+                    double calculatedSpeed = segmentDistance / (timeDiff.inMilliseconds / 1000);
+                    _currentSpeed = calculatedSpeed;
 
-                if (_currentDuration > 0) {
-                  _averageSpeed = _currentDistance / _currentDuration;
-                }
-
-                if (_currentSpeed > 0) {
-                  double paceMinPerKm = 1000 / (_currentSpeed * 60);
-                  if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
-                    int minutes = paceMinPerKm.floor();
-                    int seconds = ((paceMinPerKm - minutes) * 60).floor();
-                    _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
+                    if (calculatedSpeed > _maxSpeed) {
+                      _maxSpeed = calculatedSpeed;
+                    }
                   }
                 }
               }
+
+              _lastPositionForDistance = position;
+              _lastTimeForSpeed = DateTime.now();
 
               _activityService.addRoutePoint(
                 position,
@@ -228,6 +301,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 0,
               );
             }
+
+            _animateMarkerToNewPosition(position);
 
             if (_isNavigating && !_isTracking && !_hasArrived) {
               _mapController.move(position, 15);
@@ -238,6 +313,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           if (!mounted) return;
           setState(() {
             _currentSpeed = speed;
+            if (speed > _maxSpeed) {
+              _maxSpeed = speed;
+            }
           });
         },
       );
@@ -245,6 +323,70 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       print('❌ Error starting location updates: $e');
       _showErrorDialog('Error starting location tracking: $e');
     }
+  }
+
+  void _startTracking() {
+    ActivityType type;
+    switch (_selectedActivity) {
+      case 'running':
+        type = ActivityType.running;
+        break;
+      case 'walking':
+        type = ActivityType.walking;
+        break;
+      case 'cycling':
+        type = ActivityType.cycling;
+        break;
+      default:
+        type = ActivityType.running;
+    }
+
+    _activityService.startNewActivity(
+      '${_selectedActivity.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
+      type,
+      destination: _destination,
+    );
+
+    // RESET ALL METRICS TO ZERO
+    setState(() {
+      _isTracking = true;
+      _trackedRoute = [];
+      _currentDistance = 0;
+      _currentDuration = 0;
+      _currentSpeed = 0;
+      _maxSpeed = 0;
+      _averageSpeed = 0;
+      _formattedPace = "--:--";
+      _hasArrived = false;
+      _arrivalNotified = false;
+      _lastPositionForDistance = null;
+      _lastTimeForSpeed = null;
+    });
+
+    _stopwatch.reset();
+    _stopwatch.start();
+
+    // UPDATE METRICS EVERY 100ms FOR SMOOTH DISPLAY
+    _timer = Timer.periodic(const Duration(milliseconds: UPDATE_INTERVAL_MS), (timer) {
+      if (_isTracking && mounted) {
+        setState(() {
+          _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
+
+          if (_currentDuration > 0 && _currentDistance > 0) {
+            _averageSpeed = _currentDistance / _currentDuration;
+
+            if (_averageSpeed > 0) {
+              double paceMinPerKm = 1000 / (_averageSpeed * 60);
+              if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
+                int minutes = paceMinPerKm.floor();
+                int seconds = ((paceMinPerKm - minutes) * 60).floor();
+                _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
+              }
+            }
+          }
+        });
+      }
+    });
   }
 
   void _checkArrival() {
@@ -256,8 +398,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _destination!.latitude,
       _destination!.longitude,
     );
-
-    print('📍 Distance to destination: ${distanceToDestination.toStringAsFixed(1)}m');
 
     if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
       _handleArrival();
@@ -274,6 +414,192 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     if (_isNavigating && !_isTracking) {
       _showStartTrackingDialog();
+    }
+  }
+
+  void _stopTracking() async {
+    _stopwatch.stop();
+    _timer?.cancel();
+
+    await _activityService.finishActivity();
+
+    setState(() {
+      _isTracking = false;
+      _isNavigating = false;
+      _destination = null;
+      _routePoints = [];
+      _hasArrived = false;
+      _arrivalNotified = false;
+      _lastPositionForDistance = null;
+      _lastTimeForSpeed = null;
+    });
+
+    if (mounted) {
+      _showActivitySummary();
+    }
+  }
+
+  void _cancelTracking() {
+    _stopwatch.stop();
+    _timer?.cancel();
+    _activityService.cancelActivity();
+
+    setState(() {
+      _isTracking = false;
+      _isNavigating = false;
+      _destination = null;
+      _routePoints = [];
+      _trackedRoute = [];
+      _currentDistance = 0;
+      _currentDuration = 0;
+      _currentSpeed = 0;
+      _maxSpeed = 0;
+      _averageSpeed = 0;
+      _formattedPace = "--:--";
+      _hasArrived = false;
+      _arrivalNotified = false;
+      _lastPositionForDistance = null;
+      _lastTimeForSpeed = null;
+    });
+  }
+
+  void _showActivitySummary() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Activity Completed! 🎉'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildSummaryRow('Distance', _formatDistance(_currentDistance)),
+              const Divider(),
+              _buildSummaryRow('Duration', _formatDuration(_currentDuration)),
+              const Divider(),
+              _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed, _selectedActivity)),
+              const Divider(),
+              _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed, _selectedActivity)),
+              const Divider(),
+              _buildSummaryRow('Avg Pace', _formattedPace),
+            ],
+          ),
+          actions: [
+            TextButton(
+              child: const Text('OK'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSummaryRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.blue,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDistance(double meters) {
+    if (meters < 1000) return '${meters.toStringAsFixed(1)}m';
+    return '${(meters / 1000).toStringAsFixed(2)}km';
+  }
+
+  String _formatDuration(double seconds) {
+    int hours = (seconds / 3600).floor();
+    int minutes = ((seconds % 3600) / 60).floor();
+    int secs = (seconds % 60).floor();
+
+    if (hours > 0) {
+      return '$hours:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    } else {
+      return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    }
+  }
+
+  String _formatSpeed(double speed, String activityType) {
+    if (activityType == 'cycling') {
+      double speedKmh = speed * 3.6;
+      return '${speedKmh.toStringAsFixed(1)} km/h';
+    } else {
+      return '${speed.toStringAsFixed(1)} m/s';
+    }
+  }
+
+  void _onMapTap(TapPosition tapPosition, LatLng point) {
+    if (_isSelectingDestination && !_isTracking) {
+      setState(() {
+        _destination = point;
+        _isSelectingDestination = false;
+        _isNavigating = true;
+        _hasArrived = false;
+        _arrivalNotified = false;
+      });
+      _calculateRoute();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Destination set! Distance: ${_calculateDistanceToDestination(point)} away'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: Colors.blue,
+        ),
+      );
+    }
+  }
+
+  String _calculateDistanceToDestination(LatLng destination) {
+    if (_currentPosition == null) return 'Unknown';
+
+    double distance = geolocator.Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+
+    return _formatDistance(distance);
+  }
+
+  Future<void> _calculateRoute() async {
+    if (_currentPosition == null || _destination == null) return;
+
+    final route = await OSRMService.getRoute(_currentPosition!, _destination!);
+    setState(() {
+      _routePoints = route;
+    });
+
+    if (route.isNotEmpty && mounted) {
+      double minLat = route.map((p) => p.latitude).reduce((a, b) => a < b ? a : b);
+      double maxLat = route.map((p) => p.latitude).reduce((a, b) => a > b ? a : b);
+      double minLng = route.map((p) => p.longitude).reduce((a, b) => a < b ? a : b);
+      double maxLng = route.map((p) => p.longitude).reduce((a, b) => a > b ? a : b);
+
+      _mapController.move(
+        LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2),
+        12,
+      );
+    }
+  }
+
+  void _centerOnCurrentLocation() {
+    if (_currentPosition != null) {
+      _mapController.move(_currentPosition!, 16);
     }
   }
 
@@ -432,236 +758,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         );
       },
     );
-  }
-
-  void _startTracking() {
-    ActivityType type;
-    switch (_selectedActivity) {
-      case 'running':
-        type = ActivityType.running;
-        break;
-      case 'walking':
-        type = ActivityType.walking;
-        break;
-      case 'cycling':
-        type = ActivityType.cycling;
-        break;
-      default:
-        type = ActivityType.running;
-    }
-
-    _activityService.startNewActivity(
-      '${_selectedActivity.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
-      type,
-      destination: _destination,
-    );
-
-    setState(() {
-      _isTracking = true;
-      _trackedRoute = [];
-      _currentDistance = 0;
-      _currentDuration = 0;
-      _currentSpeed = 0;
-      _maxSpeed = 0;
-      _averageSpeed = 0;
-      _formattedPace = "--:--";
-      _hasArrived = false;
-      _arrivalNotified = false;
-    });
-
-    _stopwatch.reset();
-    _stopwatch.start();
-
-    _timer = Timer.periodic(const Duration(milliseconds: UPDATE_INTERVAL_MS), (timer) {
-      if (_isTracking && mounted) {
-        setState(() {
-          _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
-
-          if (_currentDuration > 0) {
-            _averageSpeed = _currentDistance / _currentDuration;
-          }
-        });
-      }
-    });
-  }
-
-  void _stopTracking() async {
-    _stopwatch.stop();
-    _timer?.cancel();
-
-    await _activityService.finishActivity();
-
-    setState(() {
-      _isTracking = false;
-      _isNavigating = false;
-      _destination = null;
-      _routePoints = [];
-      _hasArrived = false;
-      _arrivalNotified = false;
-    });
-
-    if (mounted) {
-      _showActivitySummary();
-    }
-  }
-
-  void _showActivitySummary() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Activity Completed! 🎉'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildSummaryRow('Distance', _formatDistance(_currentDistance)),
-              const Divider(),
-              _buildSummaryRow('Duration', _formatDuration(_currentDuration)),
-              const Divider(),
-              _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed, _selectedActivity)),
-              const Divider(),
-              _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed, _selectedActivity)),
-              const Divider(),
-              _buildSummaryRow('Avg Pace', _formattedPace),
-            ],
-          ),
-          actions: [
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildSummaryRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Colors.blue,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _cancelTracking() {
-    _stopwatch.stop();
-    _timer?.cancel();
-    _activityService.cancelActivity();
-
-    setState(() {
-      _isTracking = false;
-      _isNavigating = false;
-      _destination = null;
-      _routePoints = [];
-      _trackedRoute = [];
-      _currentDistance = 0;
-      _currentDuration = 0;
-      _currentSpeed = 0;
-      _hasArrived = false;
-      _arrivalNotified = false;
-    });
-  }
-
-  String _formatDistance(double meters) {
-    if (meters < 1000) return '${meters.toStringAsFixed(1)}m';
-    return '${(meters / 1000).toStringAsFixed(2)}km';
-  }
-
-  String _formatDuration(double seconds) {
-    int hours = (seconds / 3600).floor();
-    int minutes = ((seconds % 3600) / 60).floor();
-    int secs = (seconds % 60).floor();
-
-    if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-    } else {
-      return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-    }
-  }
-
-  String _formatSpeed(double speed, String activityType) {
-    if (activityType == 'cycling') {
-      double speedKmh = speed * 3.6;
-      return '${speedKmh.toStringAsFixed(1)} km/h';
-    } else {
-      return '${speed.toStringAsFixed(1)} m/s';
-    }
-  }
-
-  void _onMapTap(TapPosition tapPosition, LatLng point) {
-    if (_isSelectingDestination && !_isTracking) {
-      setState(() {
-        _destination = point;
-        _isSelectingDestination = false;
-        _isNavigating = true;
-        _hasArrived = false;
-        _arrivalNotified = false;
-      });
-      _calculateRoute();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Destination set! Distance: ${_calculateDistanceToDestination(point)} away'),
-          duration: const Duration(seconds: 2),
-          backgroundColor: Colors.blue,
-        ),
-      );
-    }
-  }
-
-  String _calculateDistanceToDestination(LatLng destination) {
-    if (_currentPosition == null) return 'Unknown';
-
-    double distance = geolocator.Geolocator.distanceBetween(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      destination.latitude,
-      destination.longitude,
-    );
-
-    return _formatDistance(distance);
-  }
-
-  Future<void> _calculateRoute() async {
-    if (_currentPosition == null || _destination == null) return;
-
-    final route = await OSRMService.getRoute(_currentPosition!, _destination!);
-    setState(() {
-      _routePoints = route;
-    });
-
-    if (route.isNotEmpty && mounted) {
-      double minLat = route.map((p) => p.latitude).reduce((a, b) => a < b ? a : b);
-      double maxLat = route.map((p) => p.latitude).reduce((a, b) => a > b ? a : b);
-      double minLng = route.map((p) => p.longitude).reduce((a, b) => a < b ? a : b);
-      double maxLng = route.map((p) => p.longitude).reduce((a, b) => a > b ? a : b);
-
-      _mapController.move(
-        LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2),
-        12,
-      );
-    }
-  }
-
-  void _centerOnCurrentLocation() {
-    if (_currentPosition != null) {
-      _mapController.move(_currentPosition!, 16);
-    }
   }
 
   void _showPermissionDialog() {
@@ -884,12 +980,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               onTap: _onMapTap,
             ),
             children: [
-              // FIX: Added tileProvider for web performance
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.strava',
                 tileProvider: CancellableNetworkTileProvider(),
               ),
+
+              // REMOVED AttributionWidget - this was causing the error
 
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
@@ -928,36 +1025,44 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
               MarkerLayer(
                 markers: [
-                  if (_currentPosition != null)
+                  if (_currentAnimatedPosition != null)
                     Marker(
-                      point: _currentPosition!,
-                      width: 30,
-                      height: 30,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: _activityColors[currentType] ?? Colors.orange,
-                            width: 3,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 5,
-                              spreadRadius: 1,
+                      point: _currentAnimatedPosition!,
+                      width: 40,
+                      height: 40,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut,
+                        child: Transform.rotate(
+                          angle: _heading * pi / 180,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: _activityColors[currentType] ?? Colors.blue,
+                                width: 3,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.3),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                        child: Center(
-                          child: Icon(
-                            Icons.navigation,
-                            color: _activityColors[currentType] ?? Colors.orange,
-                            size: 16,
+                            child: Center(
+                              child: Icon(
+                                _getDirectionalIcon(currentType),
+                                color: _activityColors[currentType] ?? Colors.blue,
+                                size: 20,
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
+
                   if (_destination != null)
                     Marker(
                       point: _destination!,
@@ -995,7 +1100,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ],
           ),
 
-          // Live Tracking Stats Card
+          // Live Tracking Stats Card - UPDATES INSTANTLY
           if (_isTracking)
             Positioned(
               top: 16,
@@ -1321,6 +1426,17 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
+  IconData _getDirectionalIcon(ActivityType type) {
+    switch (type) {
+      case ActivityType.running:
+        return Icons.directions_run;
+      case ActivityType.walking:
+        return Icons.directions_walk;
+      case ActivityType.cycling:
+        return Icons.directions_bike;
+    }
+  }
+
   Widget _buildStatItem(String label, String value, IconData icon, Color color) {
     return Column(
       children: [
@@ -1349,6 +1465,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _timer?.cancel();
     _stopwatch.stop();
     _locationService.dispose();
+    _markerAnimationController?.dispose();
     super.dispose();
   }
 }
