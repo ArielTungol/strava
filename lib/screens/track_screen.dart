@@ -8,7 +8,6 @@ import '../services/location_service.dart';
 import '../services/osrm_service.dart';
 import '../services/activity_service.dart';
 import '../models/activity.dart';
-import '../widgets/activity_summary_card.dart';
 
 class TrackScreen extends StatefulWidget {
   final LatLng? currentLocation;
@@ -35,10 +34,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   String _selectedActivity = 'running';
   bool _locationPermissionGranted = false;
   bool _isLoadingLocation = true;
+  String _locationError = '';
 
   // Arrival detection
   bool _hasArrived = false;
-  double _arrivalThreshold = 50.0; // meters - distance to consider "arrived"
+  double _arrivalThreshold = 50.0; // meters
   bool _arrivalNotified = false;
 
   // Live tracking metrics
@@ -47,7 +47,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   double _currentDuration = 0;
   double _maxSpeed = 0;
   double _averageSpeed = 0;
-  double _currentPace = 0;
   String _formattedPace = "--:--";
 
   Timer? _timer;
@@ -76,26 +75,31 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   Future<void> _initializeLocation() async {
     setState(() {
       _isLoadingLocation = true;
+      _locationError = '';
     });
 
     try {
+      // Step 1: Check if location services are enabled
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        _showLocationServicesDialog();
         setState(() {
           _isLoadingLocation = false;
-          _locationPermissionGranted = false;
+          _locationError = 'Location services are disabled';
         });
+        _showLocationServicesDialog();
         return;
       }
 
+      // Step 2: Check and request permissions
       geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+
       if (permission == geolocator.LocationPermission.denied) {
+        // Request permission
         permission = await geolocator.Geolocator.requestPermission();
         if (permission == geolocator.LocationPermission.denied) {
           setState(() {
             _isLoadingLocation = false;
-            _locationPermissionGranted = false;
+            _locationError = 'Location permissions denied';
           });
           _showPermissionDialog();
           return;
@@ -105,99 +109,138 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       if (permission == geolocator.LocationPermission.deniedForever) {
         setState(() {
           _isLoadingLocation = false;
-          _locationPermissionGranted = false;
+          _locationError = 'Location permissions permanently denied';
         });
         _showPermissionDialog();
         return;
       }
 
-      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
-        desiredAccuracy: geolocator.LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 10),
-      );
+      // Step 3: Try to get current location with multiple attempts
+      print('📍 Attempting to get current location...');
 
-      setState(() {
-        _currentPosition = LatLng(position.latitude, position.longitude);
-        _locationPermissionGranted = true;
-        _isLoadingLocation = false;
-      });
+      geolocator.Position? position;
+      int attempts = 0;
+      const maxAttempts = 3;
 
-      _mapController.move(_currentPosition!, 15);
-      _startLocationUpdates();
+      while (position == null && attempts < maxAttempts) {
+        try {
+          position = await geolocator.Geolocator.getCurrentPosition(
+            desiredAccuracy: geolocator.LocationAccuracy.best,
+            timeLimit: const Duration(seconds: 5),
+          );
+          print('✅ Got location on attempt ${attempts + 1}');
+        } catch (e) {
+          attempts++;
+          print('❌ Attempt $attempts failed: $e');
+          if (attempts < maxAttempts) {
+            await Future.delayed(const Duration(seconds: 1));
+          }
+        }
+      }
+
+      if (position != null) {
+        setState(() {
+          _currentPosition = LatLng(position!.latitude, position!.longitude);
+          _locationPermissionGranted = true;
+          _isLoadingLocation = false;
+        });
+
+        print('📍 Current position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
+
+        // Move map to current location
+        _mapController.move(_currentPosition!, 15);
+
+        // Start location updates
+        _startLocationUpdates();
+      } else {
+        setState(() {
+          _isLoadingLocation = false;
+          _locationError = 'Could not get location. Please try again.';
+        });
+        _showErrorDialog('Could not get your location. Please make sure you are outside or have a clear GPS signal.');
+      }
 
     } catch (e) {
       print('❌ Error in location initialization: $e');
       setState(() {
         _isLoadingLocation = false;
-        _locationPermissionGranted = false;
+        _locationError = 'Error: $e';
       });
+      _showErrorDialog('An error occurred while getting your location: $e');
     }
   }
 
   void _startLocationUpdates() {
-    _locationService.startTracking(
-      onPositionChanged: (position) {
-        setState(() {
-          _currentPosition = position;
+    try {
+      _locationService.startTracking(
+        onPositionChanged: (position) {
+          if (!mounted) return;
 
-          // Check if arrived at destination
-          if (_destination != null && !_hasArrived) {
-            _checkArrival();
-          }
+          setState(() {
+            _currentPosition = position;
 
-          if (_isTracking) {
-            _trackedRoute.add(position);
-
-            if (_trackedRoute.length >= 2) {
-              LatLng lastPoint = _trackedRoute[_trackedRoute.length - 2];
-              double segmentDistance = geolocator.Geolocator.distanceBetween(
-                lastPoint.latitude,
-                lastPoint.longitude,
-                position.latitude,
-                position.longitude,
-              );
-
-              _currentDistance += segmentDistance;
-
-              if (_currentSpeed > _maxSpeed) {
-                _maxSpeed = _currentSpeed;
-              }
-
-              if (_currentDuration > 0) {
-                _averageSpeed = _currentDistance / _currentDuration;
-              }
-
-              if (_currentSpeed > 0) {
-                double paceMinPerKm = 1000 / (_currentSpeed * 60);
-                if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
-                  int minutes = paceMinPerKm.floor();
-                  int seconds = ((paceMinPerKm - minutes) * 60).floor();
-                  _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
-                }
-              }
+            // Check if arrived at destination
+            if (_destination != null && !_hasArrived) {
+              _checkArrival();
             }
 
-            _activityService.addRoutePoint(
-              position,
-              _currentSpeed,
-              0,
-            );
-          }
+            if (_isTracking) {
+              _trackedRoute.add(position);
 
-          if (_isNavigating && !_isTracking && !_hasArrived) {
-            _mapController.move(position, 15);
-          }
-        });
-      },
-      onSpeedChanged: (speed) {
-        setState(() {
-          _currentSpeed = speed;
-        });
-      },
-    );
+              if (_trackedRoute.length >= 2) {
+                LatLng lastPoint = _trackedRoute[_trackedRoute.length - 2];
+                double segmentDistance = geolocator.Geolocator.distanceBetween(
+                  lastPoint.latitude,
+                  lastPoint.longitude,
+                  position.latitude,
+                  position.longitude,
+                );
+
+                _currentDistance += segmentDistance;
+
+                if (_currentSpeed > _maxSpeed) {
+                  _maxSpeed = _currentSpeed;
+                }
+
+                if (_currentDuration > 0) {
+                  _averageSpeed = _currentDistance / _currentDuration;
+                }
+
+                if (_currentSpeed > 0) {
+                  double paceMinPerKm = 1000 / (_currentSpeed * 60);
+                  if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
+                    int minutes = paceMinPerKm.floor();
+                    int seconds = ((paceMinPerKm - minutes) * 60).floor();
+                    _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
+                  }
+                }
+              }
+
+              _activityService.addRoutePoint(
+                position,
+                _currentSpeed,
+                0,
+              );
+            }
+
+            if (_isNavigating && !_isTracking && !_hasArrived) {
+              _mapController.move(position, 15);
+            }
+          });
+        },
+        onSpeedChanged: (speed) {
+          if (!mounted) return;
+          setState(() {
+            _currentSpeed = speed;
+          });
+        },
+      );
+    } catch (e) {
+      print('❌ Error starting location updates: $e');
+      _showErrorDialog('Error starting location tracking: $e');
+    }
   }
 
-  // New method to check if user has arrived at destination
   void _checkArrival() {
     if (_destination == null || _currentPosition == null || _hasArrived) return;
 
@@ -215,26 +258,19 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  // Handle arrival at destination
   void _handleArrival() {
     setState(() {
       _hasArrived = true;
       _arrivalNotified = true;
     });
 
-    // Show arrival dialog
     _showArrivalDialog();
 
-    // Vibrate if on physical device (optional)
-    // HapticFeedback.heavyImpact();
-
-    // If currently navigating but not tracking, ask if they want to start tracking
     if (_isNavigating && !_isTracking) {
       _showStartTrackingDialog();
     }
   }
 
-  // Show arrival notification
   void _showArrivalDialog() {
     showDialog(
       context: context,
@@ -325,7 +361,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  // Show dialog to start tracking after arrival
   void _showStartTrackingDialog() {
     showDialog(
       context: context,
@@ -340,7 +375,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               child: const Text('No'),
               onPressed: () {
                 Navigator.of(context).pop();
-                // Clear destination
                 setState(() {
                   _destination = null;
                   _routePoints = [];
@@ -367,33 +401,30 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  // Show arrival success snackbar (alternative to dialog)
-  void _showArrivalSnackbar() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.celebration, color: Colors.white),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '🎉 You have arrived at your destination! Distance: ${_formatDistance(_currentDistance)}',
-              ),
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Error'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              child: const Text('OK'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Retry'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _initializeLocation();
+              },
             ),
           ],
-        ),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 5),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -577,7 +608,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       });
       _calculateRoute();
 
-      // Show destination set confirmation
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Destination set! Distance: ${_calculateDistanceToDestination(point)} away'),
@@ -646,6 +676,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 geolocator.Geolocator.openLocationSettings();
               },
             ),
+            TextButton(
+              child: const Text('Retry'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _initializeLocation();
+              },
+            ),
           ],
         );
       },
@@ -670,8 +707,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               },
             ),
             TextButton(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Retry'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _initializeLocation();
+              },
             ),
           ],
         );
@@ -707,6 +747,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               Text(
                 'Getting your location...',
                 style: TextStyle(color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 8),
+              if (_locationError.isNotEmpty)
+                Text(
+                  _locationError,
+                  style: const TextStyle(color: Colors.red),
+                  textAlign: TextAlign.center,
+                ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _initializeLocation,
+                child: const Text('Retry'),
               ),
             ],
           ),
@@ -750,6 +802,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     geolocator.Geolocator.openLocationSettings();
                   },
                   child: const Text('Open Settings'),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _initializeLocation,
+                  child: const Text('Retry'),
                 ),
               ],
             ),
@@ -826,7 +883,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 userAgentPackageName: 'com.example.strava',
               ),
 
-              // Route to destination
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -838,7 +894,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
 
-              // Tracked route
               if (_trackedRoute.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -850,7 +905,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
 
-              // Destination zone indicator (when navigating)
               if (_destination != null && _isNavigating)
                 CircleLayer(
                   circles: [
@@ -859,12 +913,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       color: Colors.green.withValues(alpha: 0.2),
                       borderColor: Colors.green,
                       borderStrokeWidth: 2,
-                      radius: _arrivalThreshold, // Visualize arrival zone
+                      radius: _arrivalThreshold,
                     ),
                   ],
                 ),
 
-              // Markers
               MarkerLayer(
                 markers: [
                   if (_currentPosition != null)
@@ -985,7 +1038,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         _buildStatItem(
                           'Avg Pace',
                           _formattedPace,
-                          Icons.backspace,
+                          Icons.timer_outlined,
                           _activityColors[currentType] ?? Colors.blue,
                         ),
                         _buildStatItem(
@@ -1001,7 +1054,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // Destination Info Card (when navigating but not tracking)
+          // Destination Info Card
           if (_isNavigating && !_isTracking && _destination != null)
             Positioned(
               top: 16,
