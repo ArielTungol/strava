@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
 
@@ -69,7 +70,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    _initializeLocation();
+    // FIX: Ensure widgets are built before location starts
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeLocation();
+    });
   }
 
   Future<void> _initializeLocation() async {
@@ -147,8 +151,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
         print('📍 Current position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
 
-        // Move map to current location
-        _mapController.move(_currentPosition!, 15);
+        // FIX: Add delay to ensure map controller is ready
+        Future.delayed(const Duration(milliseconds: 100), () {
+          _mapController.move(_currentPosition!, 15);
+        });
 
         // Start location updates
         _startLocationUpdates();
@@ -878,9 +884,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               onTap: _onMapTap,
             ),
             children: [
+              // FIX: Added tileProvider for web performance
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.strava',
+                tileProvider: CancellableNetworkTileProvider(),
               ),
 
               if (_routePoints.isNotEmpty)
