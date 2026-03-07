@@ -42,7 +42,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   bool _isTracking = false;
   bool _isSelectingDestination = false;
   bool _isNavigating = false;
-  String _selectedActivity = 'running'; // Removed driving option
+  String _selectedActivity = 'running';
   bool _locationPermissionGranted = false;
   bool _isLoadingLocation = true;
 
@@ -57,7 +57,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   double _arrivalThreshold = 20.0; // meters
   bool _arrivalNotified = false;
 
-  // Live tracking metrics
+  // LIVE TRACKING METRICS - These need to update in real-time
   double _currentSpeed = 0;
   double _currentDistance = 0; // in km
   double _currentDuration = 0; // in seconds
@@ -79,7 +79,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   LatLng? _currentAnimatedPosition;
   double _heading = 0.0;
 
-  static const int UPDATE_INTERVAL_MS = 100;
+  static const int UPDATE_INTERVAL_MS = 100; // Update UI every 100ms for smooth display
   static const int MARKER_ANIMATION_DURATION_MS = 300;
 
   final Map<ActivityType, IconData> _activityIcons = {
@@ -225,32 +225,26 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _startLocationUpdates() {
-    _positionSubscription = geolocator.Geolocator.getPositionStream(
-      locationSettings: const geolocator.LocationSettings(
-        accuracy: geolocator.LocationAccuracy.bestForNavigation,
-        distanceFilter: 0, // Update on EVERY movement
-      ),
-    ).listen((geolocator.Position position) {
-      if (!mounted) return;
+    print('📍 Starting location updates from track_screen');
 
-      final newPosition = LatLng(position.latitude, position.longitude);
+    _locationService.startTracking(
+      onPositionChanged: (position) {
+        if (!mounted) return;
 
-      // Store previous position
-      if (_currentPosition != null) {
-        _previousPosition = _currentPosition;
-      }
+        print('📍 Position update received in track_screen: $position');
 
-      // Animate marker to new position
-      _animateMarkerToNewPosition(newPosition);
-
-      setState(() {
-        _currentPosition = newPosition;
-        _currentSpeed = position.speed;
-
-        // Update max speed
-        if (_currentSpeed > _maxSpeed) {
-          _maxSpeed = _currentSpeed;
+        // Store previous position
+        if (_currentPosition != null) {
+          _previousPosition = _currentPosition;
         }
+
+        // Animate marker to new position
+        _animateMarkerToNewPosition(position);
+
+        // Update UI with new position
+        setState(() {
+          _currentPosition = position;
+        });
 
         // Check if arrived at destination
         if (_destination != null && !_hasArrived) {
@@ -259,45 +253,53 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
         if (_isTracking) {
           // Add to tracked route
-          _trackedRoute.add(newPosition);
+          setState(() {
+            _trackedRoute.add(position);
+          });
 
-          // Calculate distance
+          // Calculate distance between last position and current position
           if (_lastPositionForDistance != null) {
             double segmentDistance = geolocator.Geolocator.distanceBetween(
               _lastPositionForDistance!.latitude,
               _lastPositionForDistance!.longitude,
-              newPosition.latitude,
-              newPosition.longitude,
+              position.latitude,
+              position.longitude,
             );
 
-            // Update distance (convert to km)
-            _currentDistance += segmentDistance / 1000;
+            print('📍 Segment distance: ${segmentDistance.toStringAsFixed(2)}m');
+
+            // Update total distance (convert to km)
+            setState(() {
+              _currentDistance += segmentDistance / 1000;
+            });
 
             // Calculate speed from time and distance
             if (_lastTimeForSpeed != null) {
               Duration timeDiff = DateTime.now().difference(_lastTimeForSpeed!);
               if (timeDiff.inMilliseconds > 0) {
                 double calculatedSpeed = segmentDistance / (timeDiff.inMilliseconds / 1000);
-                _currentSpeed = calculatedSpeed;
-
-                if (calculatedSpeed > _maxSpeed) {
-                  _maxSpeed = calculatedSpeed;
-                }
+                setState(() {
+                  _currentSpeed = calculatedSpeed;
+                  if (calculatedSpeed > _maxSpeed) {
+                    _maxSpeed = calculatedSpeed;
+                  }
+                });
               }
             }
           }
 
-          _lastPositionForDistance = newPosition;
+          // Update last position and time
+          _lastPositionForDistance = position;
           _lastTimeForSpeed = DateTime.now();
 
           // Update remaining route
           if (_fullRoute.isNotEmpty) {
-            _updateRemainingRoute(newPosition);
+            _updateRemainingRoute(position);
           }
 
           // Update activity service
           _activityService.addRoutePoint(
-            newPosition,
+            position,
             _currentSpeed,
             0,
           );
@@ -305,10 +307,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
         // Follow user when navigating
         if (_isNavigating && !_isTracking && !_hasArrived) {
-          _mapController.move(newPosition, 16);
+          _mapController.move(position, 16);
         }
-      });
-    });
+      },
+      onSpeedChanged: (speed) {
+        if (!mounted) return;
+        print('📍 Speed update in track_screen: $speed m/s');
+        setState(() {
+          _currentSpeed = speed;
+          if (speed > _maxSpeed) {
+            _maxSpeed = speed;
+          }
+        });
+      },
+    );
   }
 
   void _updateRemainingRoute(LatLng currentPosition) {
@@ -387,10 +399,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     await _activityService.finishActivity();
 
     _showArrivalDialog();
-
-    if (mounted) {
-      _showActivitySummary();
-    }
+    _showActivitySummary();
 
     // Reset after delay
     Future.delayed(const Duration(seconds: 3), () {
@@ -407,6 +416,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _arrivalNotified = false;
           _currentDistance = 0;
           _currentDuration = 0;
+          _currentSpeed = 0;
           _maxSpeed = 0;
           _averageSpeed = 0;
           _formattedPace = "--:--";
@@ -482,9 +492,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               const Divider(),
               _buildSummaryRow('Duration', _formatDuration(_currentDuration)),
               const Divider(),
-              _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed)),
+              _buildSummaryRow('Avg Speed', '${_averageSpeed.toStringAsFixed(1)} m/s'),
               const Divider(),
-              _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed)),
+              _buildSummaryRow('Max Speed', '${_maxSpeed.toStringAsFixed(1)} m/s'),
               const Divider(),
               _buildSummaryRow('Avg Pace', _formattedPace),
             ],
@@ -535,6 +545,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       destination: _destination,
     );
 
+    // Reset all metrics
     setState(() {
       _isTracking = true;
       _trackedRoute = [];
@@ -549,35 +560,37 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
-
-      if (_fullRoute.isNotEmpty) {
-        _remainingRoute = List.from(_fullRoute);
-      }
     });
+
+    if (_fullRoute.isNotEmpty) {
+      setState(() {
+        _remainingRoute = List.from(_fullRoute);
+      });
+    }
 
     _stopwatch.reset();
     _stopwatch.start();
 
-    // Update duration every 100ms for smooth display
+    // Timer updates duration, average speed, and pace every 100ms
     _timer = Timer.periodic(const Duration(milliseconds: UPDATE_INTERVAL_MS), (timer) {
-      if (_isTracking && mounted) {
-        setState(() {
-          _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
+      if (!_isTracking || !mounted) return;
 
-          if (_currentDuration > 0 && _currentDistance > 0) {
-            _averageSpeed = (_currentDistance * 1000) / _currentDuration;
+      setState(() {
+        _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
 
-            if (_averageSpeed > 0) {
-              double paceMinPerKm = 1000 / (_averageSpeed * 60);
-              if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
-                int minutes = paceMinPerKm.floor();
-                int seconds = ((paceMinPerKm - minutes) * 60).floor();
-                _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
-              }
+        if (_currentDuration > 0 && _currentDistance > 0) {
+          _averageSpeed = (_currentDistance * 1000) / _currentDuration;
+
+          if (_averageSpeed > 0) {
+            double paceMinPerKm = 1000 / (_averageSpeed * 60);
+            if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
+              int minutes = paceMinPerKm.floor();
+              int seconds = ((paceMinPerKm - minutes) * 60).floor();
+              _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
             }
           }
-        });
-      }
+        }
+      });
     });
   }
 
@@ -682,10 +695,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     } else {
       return '${secs}s';
     }
-  }
-
-  String _formatSpeed(double speed) {
-    return '${speed.toStringAsFixed(1)} m/s';
   }
 
   String _formatTime(DateTime time) {
@@ -1065,7 +1074,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ),
           ),
 
-          // Activity summary during tracking
+          // Activity summary during tracking - UPDATES IN REAL-TIME
           if (_isTracking)
             Positioned(
               top: 16,
