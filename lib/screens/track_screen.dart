@@ -29,8 +29,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   LatLng? _previousPosition;
   double _heading = 0.0;
   LatLng? _destination;
-  List<LatLng> _fullRoute = []; // Complete route from start to destination
-  List<LatLng> _remainingRoute = []; // Route that hasn't been traveled yet (disappears as you pass)
+  List<LatLng> _fullRoute = []; // Only shows when destination is set
   List<LatLng> _trackedRoute = []; // Route that has been traveled
 
   bool _isTracking = false;
@@ -54,9 +53,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   double _averageSpeed = 0;
   String _formattedPace = "--:--";
 
-  // For tracking movement
+  // For tracking movement with drift protection
   LatLng? _lastPositionForDistance;
   DateTime? _lastTimeForSpeed;
+  double _minMovementThreshold = 2.0; // Only count movement > 2 meters (reduces GPS drift)
+  int _stationaryCount = 0; // Count how many updates with no movement
+  LatLng? _stablePosition; // Stable position after drift filtering
 
   Timer? _timer;
   Stopwatch _stopwatch = Stopwatch();
@@ -212,6 +214,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         final initialPosition = LatLng(position!.latitude, position!.longitude);
         setState(() {
           _currentPosition = initialPosition;
+          _stablePosition = initialPosition;
           _currentAnimatedPosition = initialPosition;
           _previousPosition = initialPosition;
           _locationPermissionGranted = true;
@@ -251,68 +254,82 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         onPositionChanged: (position) {
           if (!mounted) return;
 
-          print('📍 Position update received: $position');
+          // Calculate distance moved from last stable position
+          double distanceMoved = 0;
+          if (_stablePosition != null) {
+            distanceMoved = geolocator.Geolocator.distanceBetween(
+              _stablePosition!.latitude,
+              _stablePosition!.longitude,
+              position.latitude,
+              position.longitude,
+            );
+          }
 
-          setState(() {
-            if (_currentPosition != null) {
-              _previousPosition = _currentPosition;
-            }
-
-            LatLng oldPosition = _currentPosition ?? position;
-            _currentPosition = position;
-
-            // Check if arrived at destination
-            if (_destination != null && !_hasArrived) {
-              _checkArrival();
-            }
-
-            if (_isTracking) {
-              _trackedRoute.add(position);
-
-              // Update remaining route - remove traveled portion
-              if (_fullRoute.isNotEmpty) {
-                _updateRemainingRoute(position);
+          // Only update if moved significantly (reduce GPS drift)
+          if (distanceMoved > _minMovementThreshold || _stablePosition == null) {
+            // Significant movement detected - update position
+            setState(() {
+              if (_currentPosition != null) {
+                _previousPosition = _currentPosition;
               }
 
-              if (_lastPositionForDistance != null) {
-                double segmentDistance = geolocator.Geolocator.distanceBetween(
-                  _lastPositionForDistance!.latitude,
-                  _lastPositionForDistance!.longitude,
-                  position.latitude,
-                  position.longitude,
-                );
+              _stablePosition = position;
+              _currentPosition = position;
+              _stationaryCount = 0;
 
-                _currentDistance += segmentDistance;
+              // Animate marker to new position
+              _animateMarkerToNewPosition(position);
 
-                if (_lastTimeForSpeed != null) {
-                  Duration timeDiff = DateTime.now().difference(_lastTimeForSpeed!);
-                  if (timeDiff.inMilliseconds > 0) {
-                    double calculatedSpeed = segmentDistance / (timeDiff.inMilliseconds / 1000);
-                    _currentSpeed = calculatedSpeed;
+              // Check if arrived at destination
+              if (_destination != null && !_hasArrived) {
+                _checkArrival();
+              }
 
-                    if (calculatedSpeed > _maxSpeed) {
-                      _maxSpeed = calculatedSpeed;
+              if (_isTracking) {
+                _trackedRoute.add(position);
+
+                if (_lastPositionForDistance != null) {
+                  double segmentDistance = geolocator.Geolocator.distanceBetween(
+                    _lastPositionForDistance!.latitude,
+                    _lastPositionForDistance!.longitude,
+                    position.latitude,
+                    position.longitude,
+                  );
+
+                  _currentDistance += segmentDistance;
+
+                  if (_lastTimeForSpeed != null) {
+                    Duration timeDiff = DateTime.now().difference(_lastTimeForSpeed!);
+                    if (timeDiff.inMilliseconds > 0) {
+                      double calculatedSpeed = segmentDistance / (timeDiff.inMilliseconds / 1000);
+                      _currentSpeed = calculatedSpeed;
+
+                      if (calculatedSpeed > _maxSpeed) {
+                        _maxSpeed = calculatedSpeed;
+                      }
                     }
                   }
                 }
+
+                _lastPositionForDistance = position;
+                _lastTimeForSpeed = DateTime.now();
+
+                _activityService.addRoutePoint(
+                  position,
+                  _currentSpeed,
+                  0,
+                );
               }
 
-              _lastPositionForDistance = position;
-              _lastTimeForSpeed = DateTime.now();
-
-              _activityService.addRoutePoint(
-                position,
-                _currentSpeed,
-                0,
-              );
-            }
-
-            _animateMarkerToNewPosition(position);
-
-            if (_isNavigating && !_isTracking && !_hasArrived) {
-              _mapController.move(position, 15);
-            }
-          });
+              if (_isNavigating && !_isTracking && !_hasArrived) {
+                _mapController.move(position, 15);
+              }
+            });
+          } else {
+            // Small movement - likely GPS drift, don't update position
+            _stationaryCount++;
+            print('📍 GPS drift ignored: ${distanceMoved.toStringAsFixed(2)}m');
+          }
         },
         onSpeedChanged: (speed) {
           if (!mounted) return;
@@ -327,44 +344,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     } catch (e) {
       print('❌ Error starting location updates: $e');
       _showErrorDialog('Error starting location tracking: $e');
-    }
-  }
-
-  void _updateRemainingRoute(LatLng currentPosition) {
-    if (_fullRoute.isEmpty || _destination == null) return;
-
-    // Find the closest point on the route to current position
-    int closestIndex = 0;
-    double minDistance = double.infinity;
-
-    for (int i = 0; i < _fullRoute.length; i++) {
-      double distance = geolocator.Geolocator.distanceBetween(
-        currentPosition.latitude,
-        currentPosition.longitude,
-        _fullRoute[i].latitude,
-        _fullRoute[i].longitude,
-      );
-
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestIndex = i;
-      }
-    }
-
-    // If we're close to the route, update remaining route
-    // This removes all points up to the closest index, making the polyline disappear as you pass
-    if (minDistance < 30) { // Within 30 meters of the route
-      // Add a small offset to ensure we don't cut off too early
-      int offsetIndex = closestIndex + 2;
-      if (offsetIndex >= _fullRoute.length) {
-        offsetIndex = _fullRoute.length - 1;
-      }
-
-      // Only update if the new remaining route is shorter
-      if (offsetIndex < _remainingRoute.length) {
-        _remainingRoute = _fullRoute.sublist(offsetIndex);
-        print('📍 Route updated: ${_remainingRoute.length} points remaining');
-      }
     }
   }
 
@@ -389,7 +368,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     setState(() {
       _hasArrived = true;
       _arrivalNotified = true;
-      _remainingRoute = []; // Clear remaining route when arrived
     });
 
     if (_isTracking) {
@@ -422,7 +400,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _isNavigating = false;
           _destination = null;
           _fullRoute = [];
-          _remainingRoute = [];
           _hasArrived = false;
           _arrivalNotified = false;
           _lastPositionForDistance = null;
@@ -467,11 +444,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
-
-      // Initialize remaining route as full route when starting
-      if (_fullRoute.isNotEmpty) {
-        _remainingRoute = List.from(_fullRoute);
-      }
     });
 
     _stopwatch.reset();
@@ -510,7 +482,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _isNavigating = false;
       _destination = null;
       _fullRoute = [];
-      _remainingRoute = [];
       _hasArrived = false;
       _arrivalNotified = false;
       _lastPositionForDistance = null;
@@ -532,7 +503,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _isNavigating = false;
       _destination = null;
       _fullRoute = [];
-      _remainingRoute = [];
       _trackedRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
@@ -672,8 +642,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     setState(() {
       if (route.isNotEmpty) {
-        _fullRoute = route;
-        _remainingRoute = List.from(route); // Initially, all route is remaining
+        _fullRoute = route; // Only shows when destination is set
         print('✅ Route calculated with ${route.length} points');
       } else {
         print('❌ Route calculation returned empty list');
@@ -794,7 +763,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 setState(() {
                   _destination = null;
                   _fullRoute = [];
-                  _remainingRoute = [];
                   _isNavigating = false;
                   _hasArrived = false;
                   _arrivalNotified = false;
@@ -1071,26 +1039,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Full route (faint blue) - shows the entire planned route
-              if (_fullRoute.isNotEmpty && !_hasArrived)
+              // Route to destination - ONLY shows when destination is set
+              if (_fullRoute.isNotEmpty && !_hasArrived && _destination != null)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _fullRoute,
-                      color: Colors.blue.withValues(alpha: 0.2),
-                      strokeWidth: 4,
-                    ),
-                  ],
-                ),
-
-              // Remaining route (bright blue) - DISAPPEARS AS YOU PASS
-              if (_remainingRoute.isNotEmpty && !_hasArrived && _isTracking)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _remainingRoute,
                       color: Colors.blue.withValues(alpha: 0.8),
-                      strokeWidth: 6,
+                      strokeWidth: 5,
                     ),
                   ],
                 ),
@@ -1102,7 +1058,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     Polyline(
                       points: _trackedRoute,
                       color: _activityColors[currentType] ?? Colors.orange,
-                      strokeWidth: 6,
+                      strokeWidth: 4,
                     ),
                   ],
                 ),
@@ -1444,7 +1400,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         setState(() {
                           _destination = null;
                           _fullRoute = [];
-                          _remainingRoute = [];
                           _isNavigating = false;
                           _hasArrived = false;
                           _arrivalNotified = false;
