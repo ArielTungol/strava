@@ -25,25 +25,43 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   final LocationService _locationService = LocationService();
   final ActivityService _activityService = ActivityService();
 
+  // Current location tracking
   LatLng? _currentPosition;
   LatLng? _previousPosition;
   double _heading = 0.0;
   LatLng? _destination;
-  List<LatLng> _fullRoute = []; // Only shows when destination is set
-  List<LatLng> _trackedRoute = []; // Route that has been traveled
 
+  // Route data
+  List<LatLng> _fullRoute = [];
+  List<LatLng> _trackedRoute = []; // Added back - this was missing
+  List<Map<String, dynamic>> _routeInstructions = [];
+  List<Map<String, dynamic>> _nearbyLandmarks = [];
+
+  // Navigation state
   bool _isTracking = false;
   bool _isSelectingDestination = false;
   bool _isNavigating = false;
-  String _selectedActivity = 'running';
+  String _selectedTravelMode = 'driving';
   bool _locationPermissionGranted = false;
   bool _isLoadingLocation = true;
   String _locationError = '';
 
   // Arrival detection
   bool _hasArrived = false;
-  double _arrivalThreshold = 20.0;
+  final double _arrivalThreshold = 20.0; // Made final
   bool _arrivalNotified = false;
+
+  // Navigation info
+  String _nextInstruction = "";
+  String _nextStreet = ""; // Kept even if unused for now
+  double _distanceToNextTurn = 0;
+  String _formattedDistanceToTurn = "";
+  double _totalDistance = 0;
+  double _totalDuration = 0;
+  String _formattedEta = "";
+  String _formattedTotalDistance = "";
+  String _formattedTotalDuration = "";
+  List<Map<String, dynamic>> _routeSegments = [];
 
   // Live tracking metrics
   double _currentSpeed = 0;
@@ -56,32 +74,44 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   // For tracking movement with drift protection
   LatLng? _lastPositionForDistance;
   DateTime? _lastTimeForSpeed;
-  double _minMovementThreshold = 2.0; // Only count movement > 2 meters (reduces GPS drift)
-  int _stationaryCount = 0; // Count how many updates with no movement
-  LatLng? _stablePosition; // Stable position after drift filtering
+  final double _minMovementThreshold = 2.0; // Made final
+  int _stationaryCount = 0; // Kept for future use
+  LatLng? _stablePosition;
 
   Timer? _timer;
-  Stopwatch _stopwatch = Stopwatch();
+  final Stopwatch _stopwatch = Stopwatch(); // Made final
 
   // Animation for smooth marker movement
   AnimationController? _markerAnimationController;
-  LatLng? _targetPosition;
+  LatLng? _targetPosition; // Kept for future use
   LatLng? _currentAnimatedPosition;
 
-  static const int UPDATE_INTERVAL_MS = 100;
-  static const int MARKER_ANIMATION_DURATION_MS = 500;
+  static const int updateIntervalMs = 100; // Renamed to lowerCamelCase
+  static const int markerAnimationDurationMs = 500; // Renamed to lowerCamelCase
 
-  final Map<ActivityType, IconData> _activityIcons = {
-    ActivityType.running: Icons.directions_run,
-    ActivityType.walking: Icons.directions_walk,
-    ActivityType.cycling: Icons.directions_bike,
+  final Map<String, IconData> _travelModeIcons = {
+    'driving': Icons.directions_car,
+    'walking': Icons.directions_walk,
+    'cycling': Icons.directions_bike,
   };
 
-  final Map<ActivityType, Color> _activityColors = {
-    ActivityType.running: Colors.orange,
-    ActivityType.walking: Colors.green,
-    ActivityType.cycling: Colors.blue,
+  final Map<String, Color> _travelModeColors = {
+    'driving': Colors.blue,
+    'walking': Colors.green,
+    'cycling': Colors.orange,
   };
+
+  // Mock nearby landmarks
+  final List<Map<String, dynamic>> _mockLandmarks = [
+    {'name': 'WalterMart Arayat', 'type': 'mall', 'distance': '0.2 km'},
+    {'name': '1st Honor Pasalubong', 'type': 'shop', 'distance': '0.3 km'},
+    {'name': 'Kapet Silim - ARAYAT', 'type': 'cafe', 'distance': '0.4 km'},
+    {'name': 'Project Ohms Vape Shop', 'type': 'shop', 'distance': '0.5 km'},
+    {'name': "McDonald's Arayat", 'type': 'restaurant', 'distance': '0.6 km'},
+    {'name': 'MR. DIY', 'type': 'shop', 'distance': '0.7 km'},
+    {'name': 'Irrigation Canal', 'type': 'landmark', 'distance': '0.8 km'},
+    {'name': 'Adabbia', 'type': 'restaurant', 'distance': '0.9 km'},
+  ];
 
   @override
   void initState() {
@@ -95,7 +125,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   void _initializeMarkerAnimation() {
     _markerAnimationController = AnimationController(
       vsync: this,
-      duration: Duration(milliseconds: MARKER_ANIMATION_DURATION_MS),
+      duration: Duration(milliseconds: markerAnimationDurationMs),
     );
   }
 
@@ -110,6 +140,17 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     double bearing = atan2(y, x) * 180 / pi;
 
     return (bearing + 360) % 360;
+  }
+
+  String _getDirectionFromBearing(double bearing) {
+    if (bearing >= 337.5 || bearing < 22.5) return "north";
+    if (bearing >= 22.5 && bearing < 67.5) return "northeast";
+    if (bearing >= 67.5 && bearing < 112.5) return "east";
+    if (bearing >= 112.5 && bearing < 157.5) return "southeast";
+    if (bearing >= 157.5 && bearing < 202.5) return "south";
+    if (bearing >= 202.5 && bearing < 247.5) return "southwest";
+    if (bearing >= 247.5 && bearing < 292.5) return "west";
+    return "northwest";
   }
 
   void _animateMarkerToNewPosition(LatLng newPosition) {
@@ -188,7 +229,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         return;
       }
 
-      print('📍 Attempting to get current location...');
+      // Removed print statements
 
       geolocator.Position? position;
       int attempts = 0;
@@ -200,10 +241,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             desiredAccuracy: geolocator.LocationAccuracy.best,
             timeLimit: const Duration(seconds: 5),
           );
-          print('✅ Got location on attempt ${attempts + 1}');
         } catch (e) {
           attempts++;
-          print('❌ Attempt $attempts failed: $e');
           if (attempts < maxAttempts) {
             await Future.delayed(const Duration(seconds: 1));
           }
@@ -221,8 +260,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _isLoadingLocation = false;
         });
 
-        print('📍 Current position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
-
         Future.delayed(const Duration(milliseconds: 100), () {
           _mapController.move(_currentPosition!, 15);
         });
@@ -237,7 +274,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       }
 
     } catch (e) {
-      print('❌ Error in location initialization: $e');
       setState(() {
         _isLoadingLocation = false;
         _locationError = 'Error: $e';
@@ -247,14 +283,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _startLocationUpdates() {
-    print('📍 Starting location updates...');
-
     try {
       _locationService.startTracking(
         onPositionChanged: (position) {
           if (!mounted) return;
 
-          // Calculate distance moved from last stable position
           double distanceMoved = 0;
           if (_stablePosition != null) {
             distanceMoved = geolocator.Geolocator.distanceBetween(
@@ -265,9 +298,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             );
           }
 
-          // Only update if moved significantly (reduce GPS drift)
           if (distanceMoved > _minMovementThreshold || _stablePosition == null) {
-            // Significant movement detected - update position
             setState(() {
               if (_currentPosition != null) {
                 _previousPosition = _currentPosition;
@@ -277,12 +308,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               _currentPosition = position;
               _stationaryCount = 0;
 
-              // Animate marker to new position
               _animateMarkerToNewPosition(position);
 
-              // Check if arrived at destination
               if (_destination != null && !_hasArrived) {
                 _checkArrival();
+                _updateNavigationInstructions();
               }
 
               if (_isTracking) {
@@ -326,9 +356,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               }
             });
           } else {
-            // Small movement - likely GPS drift, don't update position
             _stationaryCount++;
-            print('📍 GPS drift ignored: ${distanceMoved.toStringAsFixed(2)}m');
           }
         },
         onSpeedChanged: (speed) {
@@ -342,9 +370,36 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         },
       );
     } catch (e) {
-      print('❌ Error starting location updates: $e');
       _showErrorDialog('Error starting location tracking: $e');
     }
+  }
+
+  void _updateNavigationInstructions() {
+    if (_fullRoute.isEmpty || _currentPosition == null) return;
+
+    double remainingDistance = 0;
+    if (_fullRoute.isNotEmpty) {
+      for (int i = 0; i < _fullRoute.length - 1; i++) {
+        remainingDistance += geolocator.Geolocator.distanceBetween(
+          _fullRoute[i].latitude,
+          _fullRoute[i].longitude,
+          _fullRoute[i + 1].latitude,
+          _fullRoute[i + 1].longitude,
+        );
+      }
+    }
+
+    double remainingDuration = _totalDuration > 0
+        ? (remainingDistance / _totalDistance) * _totalDuration
+        : 0;
+    DateTime eta = DateTime.now().add(Duration(seconds: remainingDuration.round()));
+
+    setState(() {
+      _formattedEta = _formatTime(eta);
+      _nextInstruction = "Head ${_getDirectionFromBearing(_heading)}";
+      _distanceToNextTurn = remainingDistance > 1000 ? 1000 : remainingDistance;
+      _formattedDistanceToTurn = _formatDistance(_distanceToNextTurn);
+    });
   }
 
   void _checkArrival() {
@@ -356,8 +411,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _destination!.latitude,
       _destination!.longitude,
     );
-
-    print('📍 Distance to destination: ${distanceToDestination.toStringAsFixed(1)}m');
 
     if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
       _handleArrival();
@@ -378,8 +431,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _autoStopTracking() async {
-    print('📍 AUTO-STOP: Reached destination, finishing activity...');
-
     _stopwatch.stop();
     _timer?.cancel();
 
@@ -400,6 +451,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _isNavigating = false;
           _destination = null;
           _fullRoute = [];
+          _routeInstructions = [];
+          _trackedRoute = [];
           _hasArrived = false;
           _arrivalNotified = false;
           _lastPositionForDistance = null;
@@ -410,24 +463,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _startTracking() {
-    ActivityType type;
-    switch (_selectedActivity) {
-      case 'running':
-        type = ActivityType.running;
-        break;
-      case 'walking':
-        type = ActivityType.walking;
-        break;
-      case 'cycling':
-        type = ActivityType.cycling;
-        break;
-      default:
-        type = ActivityType.running;
-    }
-
     _activityService.startNewActivity(
-      '${_selectedActivity.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
-      type,
+      '${_selectedTravelMode.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
+      _getActivityTypeFromString(_selectedTravelMode),
       destination: _destination,
     );
 
@@ -449,7 +487,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _stopwatch.reset();
     _stopwatch.start();
 
-    _timer = Timer.periodic(const Duration(milliseconds: UPDATE_INTERVAL_MS), (timer) {
+    _timer = Timer.periodic(Duration(milliseconds: updateIntervalMs), (timer) {
       if (_isTracking && mounted) {
         setState(() {
           _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
@@ -471,6 +509,17 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
   }
 
+  ActivityType _getActivityTypeFromString(String mode) {
+    switch (mode) {
+      case 'walking':
+        return ActivityType.walking;
+      case 'cycling':
+        return ActivityType.cycling;
+      default:
+        return ActivityType.running;
+    }
+  }
+
   void _stopTracking() async {
     _stopwatch.stop();
     _timer?.cancel();
@@ -482,6 +531,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _isNavigating = false;
       _destination = null;
       _fullRoute = [];
+      _routeInstructions = [];
+      _trackedRoute = [];
       _hasArrived = false;
       _arrivalNotified = false;
       _lastPositionForDistance = null;
@@ -503,6 +554,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _isNavigating = false;
       _destination = null;
       _fullRoute = [];
+      _routeInstructions = [];
       _trackedRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
@@ -531,9 +583,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               const Divider(),
               _buildSummaryRow('Duration', _formatDuration(_currentDuration)),
               const Divider(),
-              _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed, _selectedActivity)),
+              _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed, _selectedTravelMode)),
               const Divider(),
-              _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed, _selectedActivity)),
+              _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed, _selectedTravelMode)),
               const Divider(),
               _buildSummaryRow('Avg Pace', _formattedPace),
             ],
@@ -574,8 +626,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   String _formatDistance(double meters) {
-    if (meters < 1000) return '${meters.toStringAsFixed(1)}m';
-    return '${(meters / 1000).toStringAsFixed(2)}km';
+    if (meters < 1000) return '${meters.toStringAsFixed(0)}m';
+    return '${(meters / 1000).toStringAsFixed(1)}km';
   }
 
   String _formatDuration(double seconds) {
@@ -584,19 +636,32 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     int secs = (seconds % 60).floor();
 
     if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+      return '$hours h ${minutes} min';
+    } else if (minutes > 0) {
+      return '$minutes min';
     } else {
-      return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+      return '${secs} sec';
     }
   }
 
-  String _formatSpeed(double speed, String activityType) {
-    if (activityType == 'cycling') {
+  String _formatSpeed(double speed, String travelMode) {
+    if (travelMode == 'driving' || travelMode == 'cycling') {
       double speedKmh = speed * 3.6;
       return '${speedKmh.toStringAsFixed(1)} km/h';
     } else {
       return '${speed.toStringAsFixed(1)} m/s';
     }
+  }
+
+  String _formatTime(DateTime time) {
+    int hour = time.hour;
+    int minute = time.minute;
+    String period = hour >= 12 ? 'PM' : 'AM';
+
+    if (hour > 12) hour -= 12;
+    if (hour == 0) hour = 12;
+
+    return '$hour:${minute.toString().padLeft(2, '0')} $period';
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
@@ -612,7 +677,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Destination set! Distance: ${_calculateDistanceToDestination(point)} away'),
+          content: Text('Destination set! ${_calculateDistanceToDestination(point)} away'),
           duration: const Duration(seconds: 2),
           backgroundColor: Colors.blue,
         ),
@@ -636,16 +701,23 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   Future<void> _calculateRoute() async {
     if (_currentPosition == null || _destination == null) return;
 
-    print('📍 Calculating route from $_currentPosition to $_destination');
-
     final route = await OSRMService.getRoute(_currentPosition!, _destination!);
+    final details = await OSRMService.getRouteDetails(_currentPosition!, _destination!);
 
     setState(() {
       if (route.isNotEmpty) {
-        _fullRoute = route; // Only shows when destination is set
-        print('✅ Route calculated with ${route.length} points');
-      } else {
-        print('❌ Route calculation returned empty list');
+        _fullRoute = route;
+        _totalDistance = details['distance'];
+        _totalDuration = details['duration'];
+        _formattedTotalDistance = _formatDistance(_totalDistance);
+        _formattedTotalDuration = _formatDuration(_totalDuration);
+
+        DateTime eta = DateTime.now().add(Duration(seconds: _totalDuration.round()));
+        _formattedEta = _formatTime(eta);
+        _nextInstruction = "Head ${_getDirectionFromBearing(_heading)}";
+
+        _generateMockRouteSegments();
+        _generateMockNearbyLandmarks();
       }
     });
 
@@ -660,6 +732,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         12,
       );
     }
+  }
+
+  void _generateMockRouteSegments() {
+    _routeSegments = [
+      {'instruction': 'Head north', 'distance': '0.3 km', 'time': '2 min'},
+      {'instruction': 'Turn right', 'distance': '0.5 km', 'time': '3 min'},
+      {'instruction': 'Continue straight', 'distance': '1.2 km', 'time': '5 min'},
+      {'instruction': 'Turn left', 'distance': '0.4 km', 'time': '2 min'},
+      {'instruction': 'Arrive at destination', 'distance': '0.1 km', 'time': '1 min'},
+    ];
+  }
+
+  void _generateMockNearbyLandmarks() {
+    _nearbyLandmarks = _mockLandmarks.take(5).toList();
   }
 
   void _centerOnCurrentLocation() {
@@ -739,46 +825,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               onPressed: () {
                 Navigator.of(context).pop();
               },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showStartTrackingDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Start Tracking?'),
-          content: const Text(
-              'Would you like to start tracking your activity from here?'
-          ),
-          actions: [
-            TextButton(
-              child: const Text('No'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                setState(() {
-                  _destination = null;
-                  _fullRoute = [];
-                  _isNavigating = false;
-                  _hasArrived = false;
-                  _arrivalNotified = false;
-                });
-              },
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _startTracking();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Yes, Start'),
             ),
           ],
         );
@@ -876,20 +922,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    ActivityType currentType;
-    switch (_selectedActivity) {
-      case 'running':
-        currentType = ActivityType.running;
-        break;
-      case 'walking':
-        currentType = ActivityType.walking;
-        break;
-      case 'cycling':
-        currentType = ActivityType.cycling;
-        break;
-      default:
-        currentType = ActivityType.running;
-    }
+    Color currentColor = _travelModeColors[_selectedTravelMode] ?? Colors.blue;
 
     if (_isLoadingLocation) {
       return Scaffold(
@@ -973,48 +1006,21 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     return Scaffold(
       appBar: AppBar(
         title: const Text('Track Activity'),
-        backgroundColor: _activityColors[currentType]?.withValues(alpha: 0.9),
+        backgroundColor: currentColor.withValues(alpha: 0.9),
         foregroundColor: Colors.white,
         actions: [
-          if (!_isTracking)
+          if (!_isTracking && !_isNavigating)
             PopupMenuButton<String>(
-              icon: const Icon(Icons.sports_score),
+              icon: const Icon(Icons.directions),
               onSelected: (value) {
                 setState(() {
-                  _selectedActivity = value;
+                  _selectedTravelMode = value;
                 });
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'running',
-                  child: Row(
-                    children: [
-                      Icon(Icons.directions_run, color: Colors.orange),
-                      SizedBox(width: 8),
-                      Text('Running'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'walking',
-                  child: Row(
-                    children: [
-                      Icon(Icons.directions_walk, color: Colors.green),
-                      SizedBox(width: 8),
-                      Text('Walking'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'cycling',
-                  child: Row(
-                    children: [
-                      Icon(Icons.directions_bike, color: Colors.blue),
-                      SizedBox(width: 8),
-                      Text('Cycling'),
-                    ],
-                  ),
-                ),
+                const PopupMenuItem(value: 'driving', child: Row(children: [Icon(Icons.directions_car, color: Colors.blue), SizedBox(width: 8), Text('Driving')])),
+                const PopupMenuItem(value: 'walking', child: Row(children: [Icon(Icons.directions_walk, color: Colors.green), SizedBox(width: 8), Text('Walking')])),
+                const PopupMenuItem(value: 'cycling', child: Row(children: [Icon(Icons.directions_bike, color: Colors.orange), SizedBox(width: 8), Text('Cycling')])),
               ],
             ),
         ],
@@ -1039,25 +1045,25 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Route to destination - ONLY shows when destination is set
+              // Route to destination
               if (_fullRoute.isNotEmpty && !_hasArrived && _destination != null)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _fullRoute,
-                      color: Colors.blue.withValues(alpha: 0.8),
+                      color: currentColor.withValues(alpha: 0.8),
                       strokeWidth: 5,
                     ),
                   ],
                 ),
 
-              // Tracked route (activity color) - shows where you've been
+              // Tracked route
               if (_trackedRoute.isNotEmpty)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _trackedRoute,
-                      color: _activityColors[currentType] ?? Colors.orange,
+                      color: currentColor.withValues(alpha: 0.4),
                       strokeWidth: 4,
                     ),
                   ],
@@ -1076,6 +1082,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
 
+              // Current position marker
               MarkerLayer(
                 markers: [
                   if (_currentAnimatedPosition != null)
@@ -1093,7 +1100,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                               color: Colors.white,
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: _activityColors[currentType] ?? Colors.blue,
+                                color: currentColor,
                                 width: 3,
                               ),
                               boxShadow: [
@@ -1106,8 +1113,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                             ),
                             child: Center(
                               child: Icon(
-                                _getDirectionalIcon(currentType),
-                                color: _activityColors[currentType] ?? Colors.blue,
+                                _travelModeIcons[_selectedTravelMode] ?? Icons.navigation,
+                                color: currentColor,
                                 size: 20,
                               ),
                             ),
@@ -1116,6 +1123,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       ),
                     ),
 
+                  // Destination marker
                   if (_destination != null)
                     Marker(
                       point: _destination!,
@@ -1124,7 +1132,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       child: Stack(
                         children: [
                           const Icon(
-                            Icons.location_on,
+                            Icons.location_pin,
                             color: Colors.red,
                             size: 40,
                           ),
@@ -1152,6 +1160,279 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ],
           ),
+
+          // Navigation Header
+          if (_isNavigating && _destination != null && !_hasArrived)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(20),
+                    bottomRight: Radius.circular(20),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 10,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _formattedEta,
+                                style: const TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$_formattedTotalDistance • $_formattedTotalDuration',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: currentColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(_travelModeIcons[_selectedTravelMode], size: 16, color: currentColor),
+                              const SizedBox(width: 4),
+                              Text(
+                                _selectedTravelMode.capitalize(),
+                                style: TextStyle(
+                                  color: currentColor,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: currentColor.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              Icons.arrow_upward,
+                              color: currentColor,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _nextInstruction,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Then • ${_routeSegments.isNotEmpty ? _routeSegments[0]['instruction'] : ''}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            _formattedDistanceToTurn,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Nearby Landmarks Card
+          if (_isNavigating && _nearbyLandmarks.isNotEmpty)
+            Positioned(
+              top: _isNavigating ? 200 : 16,
+              left: 16,
+              right: 80,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 10,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Along the way',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._nearbyLandmarks.take(3).map((landmark) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _getLandmarkIcon(landmark['type']),
+                            size: 16,
+                            color: Colors.grey.shade600,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              landmark['name'],
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          Text(
+                            landmark['distance'],
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )),
+                  ],
+                ),
+              ),
+            ),
+
+          // Route Segments Card
+          if (_isNavigating && _routeSegments.isNotEmpty)
+            Positioned(
+              bottom: 100,
+              left: 16,
+              right: 80,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 10,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Route',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._routeSegments.map((segment) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              color: currentColor.withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.arrow_forward,
+                                size: 12,
+                                color: currentColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              segment['instruction'],
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                segment['distance'],
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                segment['time'],
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    )),
+                  ],
+                ),
+              ),
+            ),
 
           // Live Tracking Stats Card
           if (_isTracking)
@@ -1181,19 +1462,19 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           'Distance',
                           _formatDistance(_currentDistance),
                           Icons.straighten,
-                          _activityColors[currentType] ?? Colors.blue,
+                          currentColor,
                         ),
                         _buildStatItem(
                           'Duration',
                           _formatDuration(_currentDuration),
                           Icons.timer,
-                          _activityColors[currentType] ?? Colors.blue,
+                          currentColor,
                         ),
                         _buildStatItem(
                           'Speed',
-                          _formatSpeed(_currentSpeed, _selectedActivity),
+                          _formatSpeed(_currentSpeed, _selectedTravelMode),
                           Icons.speed,
-                          _activityColors[currentType] ?? Colors.blue,
+                          currentColor,
                         ),
                       ],
                     ),
@@ -1205,88 +1486,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           'Avg Pace',
                           _formattedPace,
                           Icons.timer_outlined,
-                          _activityColors[currentType] ?? Colors.blue,
+                          currentColor,
                         ),
                         _buildStatItem(
                           'Max Speed',
-                          _formatSpeed(_maxSpeed, _selectedActivity),
+                          _formatSpeed(_maxSpeed, _selectedTravelMode),
                           Icons.flash_on,
-                          _activityColors[currentType] ?? Colors.blue,
+                          currentColor,
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Destination Info Card
-          if (_isNavigating && !_isTracking && _destination != null)
-            Positioned(
-              top: 16,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: _hasArrived ? Colors.green.shade100 : Colors.red.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        _hasArrived ? Icons.emoji_emotions : Icons.location_on,
-                        color: _hasArrived ? Colors.green : Colors.red,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _hasArrived ? 'You Have Arrived!' : 'Destination',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _hasArrived
-                                ? 'Tap Start to begin your activity'
-                                : '${_calculateDistanceToDestination(_destination!)} away',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey.shade600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (_hasArrived && !_isTracking)
-                      ElevatedButton(
-                        onPressed: _startTracking,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('Start'),
-                      ),
                   ],
                 ),
               ),
@@ -1294,119 +1503,44 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
           // Map Controls
           Positioned(
-            top: _isTracking ? 200 : (_isNavigating ? 120 : 16),
+            bottom: 100,
             right: 16,
             child: Column(
               children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.add),
-                        onPressed: () {
-                          _mapController.move(
-                            _mapController.camera.center,
-                            _mapController.camera.zoom + 1,
-                          );
-                        },
-                      ),
-                      Container(height: 1, width: 30, color: Colors.grey.shade300),
-                      IconButton(
-                        icon: const Icon(Icons.remove),
-                        onPressed: () {
-                          _mapController.move(
-                            _mapController.camera.center,
-                            _mapController.camera.zoom - 1,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
+                _buildControlButton(Icons.add, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1)),
                 const SizedBox(height: 8),
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.my_location),
-                    onPressed: _centerOnCurrentLocation,
-                  ),
-                ),
+                _buildControlButton(Icons.remove, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1)),
                 const SizedBox(height: 8),
-                if (!_isTracking && !_isNavigating)
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.place, color: Colors.red),
-                      onPressed: () {
-                        setState(() {
-                          _isSelectingDestination = true;
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Tap on the map to set destination'),
-                            duration: Duration(seconds: 3),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                if (_isNavigating && !_isTracking)
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.clear, color: Colors.red),
-                      onPressed: () {
-                        setState(() {
-                          _destination = null;
-                          _fullRoute = [];
-                          _isNavigating = false;
-                          _hasArrived = false;
-                          _arrivalNotified = false;
-                        });
-                      },
-                    ),
-                  ),
+                _buildControlButton(Icons.my_location, _centerOnCurrentLocation),
+                if (!_isTracking && !_isNavigating) ...[
+                  const SizedBox(height: 8),
+                  _buildControlButton(Icons.place, () {
+                    setState(() {
+                      _isSelectingDestination = true;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Tap on the map to set destination'),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }, color: Colors.red),
+                ],
+                if (_isNavigating && !_isTracking) ...[
+                  const SizedBox(height: 8),
+                  _buildControlButton(Icons.close, () {
+                    setState(() {
+                      _destination = null;
+                      _fullRoute = [];
+                      _routeInstructions = [];
+                      _nearbyLandmarks = [];
+                      _routeSegments = [];
+                      _isNavigating = false;
+                      _hasArrived = false;
+                      _arrivalNotified = false;
+                    });
+                  }, color: Colors.red),
+                ],
               ],
             ),
           ),
@@ -1426,7 +1560,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.2),
                       blurRadius: 10,
-                      offset: const Offset(0, 2),
                     ),
                   ],
                 ),
@@ -1437,11 +1570,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       ElevatedButton.icon(
                         onPressed: _currentPosition != null ? _startTracking : null,
                         icon: const Icon(Icons.play_arrow),
-                        label: Text(
-                          _isNavigating ? 'Start Navigation' : 'Start $_selectedActivity',
-                        ),
+                        label: Text(_isNavigating ? 'Start' : 'Start'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _activityColors[currentType],
+                          backgroundColor: currentColor,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                         ),
@@ -1479,14 +1610,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  IconData _getDirectionalIcon(ActivityType type) {
+  IconData _getLandmarkIcon(String type) {
     switch (type) {
-      case ActivityType.running:
-        return Icons.directions_run;
-      case ActivityType.walking:
-        return Icons.directions_walk;
-      case ActivityType.cycling:
-        return Icons.directions_bike;
+      case 'mall': return Icons.shopping_bag; // Fixed from shopping_mail
+      case 'shop': return Icons.shop;
+      case 'cafe': return Icons.local_cafe;
+      case 'restaurant': return Icons.restaurant;
+      case 'market': return Icons.store;
+      case 'landmark': return Icons.location_city; // Fixed from landmark
+      default: return Icons.place;
     }
   }
 
@@ -1498,14 +1630,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         Text(
           value,
           style: const TextStyle(
-            fontSize: 18,
+            fontSize: 16,
             fontWeight: FontWeight.bold,
           ),
         ),
         Text(
           label,
           style: TextStyle(
-            fontSize: 12,
+            fontSize: 11,
             color: Colors.grey.shade600,
           ),
         ),
@@ -1513,18 +1645,26 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _stopwatch.stop();
-    _locationService.dispose();
-    _markerAnimationController?.dispose();
-    super.dispose();
+  Widget _buildControlButton(IconData icon, VoidCallback onPressed, {Color color = Colors.blue}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 8,
+          ),
+        ],
+      ),
+      child: IconButton(
+        icon: Icon(icon, color: color),
+        onPressed: onPressed,
+      ),
+    );
   }
 }
 
 extension StringExtension on String {
-  String capitalize() {
-    return "${this[0].toUpperCase()}${substring(1)}";
-  }
+  String capitalize() => "${this[0].toUpperCase()}${substring(1)}";
 }
