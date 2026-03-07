@@ -33,7 +33,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Route data
   List<LatLng> _fullRoute = [];
-  List<LatLng> _trackedRoute = []; // Added back - this was missing
+  List<LatLng> _trackedRoute = [];
   List<Map<String, dynamic>> _routeInstructions = [];
   List<Map<String, dynamic>> _nearbyLandmarks = [];
 
@@ -46,14 +46,17 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   bool _isLoadingLocation = true;
   String _locationError = '';
 
+  // Bottom sheet state
+  bool _showRouteSheet = false;
+  bool _showLandmarksSheet = false;
+
   // Arrival detection
   bool _hasArrived = false;
-  final double _arrivalThreshold = 20.0; // Made final
+  final double _arrivalThreshold = 20.0;
   bool _arrivalNotified = false;
 
   // Navigation info
   String _nextInstruction = "";
-  String _nextStreet = ""; // Kept even if unused for now
   double _distanceToNextTurn = 0;
   String _formattedDistanceToTurn = "";
   double _totalDistance = 0;
@@ -74,20 +77,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   // For tracking movement with drift protection
   LatLng? _lastPositionForDistance;
   DateTime? _lastTimeForSpeed;
-  final double _minMovementThreshold = 2.0; // Made final
-  int _stationaryCount = 0; // Kept for future use
+  final double _minMovementThreshold = 2.0;
+  int _stationaryCount = 0;
   LatLng? _stablePosition;
 
   Timer? _timer;
-  final Stopwatch _stopwatch = Stopwatch(); // Made final
+  final Stopwatch _stopwatch = Stopwatch();
 
   // Animation for smooth marker movement
   AnimationController? _markerAnimationController;
-  LatLng? _targetPosition; // Kept for future use
+  LatLng? _targetPosition;
   LatLng? _currentAnimatedPosition;
 
-  static const int updateIntervalMs = 100; // Renamed to lowerCamelCase
-  static const int markerAnimationDurationMs = 500; // Renamed to lowerCamelCase
+  static const int updateIntervalMs = 100;
+  static const int markerAnimationDurationMs = 500;
 
   final Map<String, IconData> _travelModeIcons = {
     'driving': Icons.directions_car,
@@ -103,14 +106,24 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Mock nearby landmarks
   final List<Map<String, dynamic>> _mockLandmarks = [
-    {'name': 'WalterMart Arayat', 'type': 'mall', 'distance': '0.2 km'},
-    {'name': '1st Honor Pasalubong', 'type': 'shop', 'distance': '0.3 km'},
-    {'name': 'Kapet Silim - ARAYAT', 'type': 'cafe', 'distance': '0.4 km'},
-    {'name': 'Project Ohms Vape Shop', 'type': 'shop', 'distance': '0.5 km'},
-    {'name': "McDonald's Arayat", 'type': 'restaurant', 'distance': '0.6 km'},
-    {'name': 'MR. DIY', 'type': 'shop', 'distance': '0.7 km'},
-    {'name': 'Irrigation Canal', 'type': 'landmark', 'distance': '0.8 km'},
-    {'name': 'Adabbia', 'type': 'restaurant', 'distance': '0.9 km'},
+    {'name': 'WalterMart Arayat', 'type': 'mall', 'distance': '0.2 km', 'icon': Icons.shopping_bag},
+    {'name': '1st Honor Pasalubong', 'type': 'shop', 'distance': '0.3 km', 'icon': Icons.shop},
+    {'name': 'Kapet Silim - ARAYAT', 'type': 'cafe', 'distance': '0.4 km', 'icon': Icons.local_cafe},
+    {'name': 'Project Ohms Vape Shop', 'type': 'shop', 'distance': '0.5 km', 'icon': Icons.shop},
+    {'name': "McDonald's Arayat", 'type': 'restaurant', 'distance': '0.6 km', 'icon': Icons.restaurant},
+    {'name': 'MR. DIY', 'type': 'shop', 'distance': '0.7 km', 'icon': Icons.shop},
+    {'name': 'Irrigation Canal', 'type': 'landmark', 'distance': '0.8 km', 'icon': Icons.location_city},
+    {'name': 'Adabbia', 'type': 'restaurant', 'distance': '0.9 km', 'icon': Icons.restaurant},
+    {'name': 'Puregold Arayat', 'type': 'mall', 'distance': '1.0 km', 'icon': Icons.shopping_bag},
+    {'name': 'Honda Motor Sports', 'type': 'shop', 'distance': '1.1 km', 'icon': Icons.shop},
+    {'name': 'Cemetery', 'type': 'landmark', 'distance': '1.2 km', 'icon': Icons.location_city},
+    {'name': 'Soupy Buns', 'type': 'restaurant', 'distance': '1.3 km', 'icon': Icons.restaurant},
+    {'name': 'Kiri Café', 'type': 'cafe', 'distance': '1.4 km', 'icon': Icons.local_cafe},
+    {'name': 'Yamaha 3S Shop', 'type': 'shop', 'distance': '1.5 km', 'icon': Icons.shop},
+    {'name': 'Arayat Public Market', 'type': 'market', 'distance': '1.6 km', 'icon': Icons.store},
+    {'name': 'Riverside St', 'type': 'street', 'distance': '1.7 km', 'icon': Icons.road},
+    {'name': 'Richsun Home Center', 'type': 'shop', 'distance': '1.8 km', 'icon': Icons.shop},
+    {'name': 'CityMall Arayat', 'type': 'mall', 'distance': '1.9 km', 'icon': Icons.shopping_bag},
   ];
 
   @override
@@ -228,8 +241,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _showPermissionDialog();
         return;
       }
-
-      // Removed print statements
 
       geolocator.Position? position;
       int attempts = 0;
@@ -457,6 +468,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _arrivalNotified = false;
           _lastPositionForDistance = null;
           _lastTimeForSpeed = null;
+          _showRouteSheet = false;
+          _showLandmarksSheet = false;
         });
       }
     });
@@ -537,6 +550,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
+      _showRouteSheet = false;
+      _showLandmarksSheet = false;
     });
 
     if (mounted) {
@@ -566,6 +581,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
+      _showRouteSheet = false;
+      _showLandmarksSheet = false;
     });
   }
 
@@ -736,16 +753,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   void _generateMockRouteSegments() {
     _routeSegments = [
-      {'instruction': 'Head north', 'distance': '0.3 km', 'time': '2 min'},
-      {'instruction': 'Turn right', 'distance': '0.5 km', 'time': '3 min'},
-      {'instruction': 'Continue straight', 'distance': '1.2 km', 'time': '5 min'},
-      {'instruction': 'Turn left', 'distance': '0.4 km', 'time': '2 min'},
-      {'instruction': 'Arrive at destination', 'distance': '0.1 km', 'time': '1 min'},
+      {'instruction': 'Head north', 'distance': '0.3 km', 'time': '2 min', 'icon': Icons.arrow_upward},
+      {'instruction': 'Turn right', 'distance': '0.5 km', 'time': '3 min', 'icon': Icons.turn_right},
+      {'instruction': 'Continue straight', 'distance': '1.2 km', 'time': '5 min', 'icon': Icons.arrow_forward},
+      {'instruction': 'Turn left', 'distance': '0.4 km', 'time': '2 min', 'icon': Icons.turn_left},
+      {'instruction': 'Arrive at destination', 'distance': '0.1 km', 'time': '1 min', 'icon': Icons.flag},
     ];
   }
 
   void _generateMockNearbyLandmarks() {
-    _nearbyLandmarks = _mockLandmarks.take(5).toList();
+    _nearbyLandmarks = _mockLandmarks.take(8).toList();
   }
 
   void _centerOnCurrentLocation() {
@@ -830,6 +847,241 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         );
       },
     );
+  }
+
+  void _showRouteBottomSheet() {
+    setState(() {
+      _showRouteSheet = true;
+      _showLandmarksSheet = false;
+    });
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Route Details',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      setState(() {
+                        _showRouteSheet = false;
+                      });
+                      Navigator.pop(context);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _routeSegments.length,
+                itemBuilder: (context, index) {
+                  final segment = _routeSegments[index];
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _travelModeColors[_selectedTravelMode]?.withValues(alpha: 0.1) ?? Colors.blue.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            segment['icon'],
+                            color: _travelModeColors[_selectedTravelMode] ?? Colors.blue,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                segment['instruction'],
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${segment['distance']} • ${segment['time']}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.arrow_forward_ios,
+                          size: 14,
+                          color: Colors.grey.shade400,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(() {
+      setState(() {
+        _showRouteSheet = false;
+      });
+    });
+  }
+
+  void _showLandmarksBottomSheet() {
+    setState(() {
+      _showLandmarksSheet = true;
+      _showRouteSheet = false;
+    });
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Along the Way',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      setState(() {
+                        _showLandmarksSheet = false;
+                      });
+                      Navigator.pop(context);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _nearbyLandmarks.length,
+                itemBuilder: (context, index) {
+                  final landmark = _nearbyLandmarks[index];
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            landmark['icon'],
+                            color: Colors.blue,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                landmark['name'],
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                landmark['distance'],
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            landmark['type'],
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(() {
+      setState(() {
+        _showLandmarksSheet = false;
+      });
+    });
   }
 
   void _showErrorDialog(String message) {
@@ -1082,75 +1334,91 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
 
-              // Current position marker
+              // Google Maps Style Current Position Marker
               MarkerLayer(
                 markers: [
                   if (_currentAnimatedPosition != null)
                     Marker(
                       point: _currentAnimatedPosition!,
-                      width: 40,
-                      height: 40,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut,
-                        child: Transform.rotate(
-                          angle: _heading * pi / 180,
-                          child: Container(
+                      width: 24,
+                      height: 24,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // Outer ring pulse animation
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 1000),
+                            curve: Curves.easeInOut,
+                            width: 24,
+                            height: 24,
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: currentColor.withValues(alpha: 0.2),
                               shape: BoxShape.circle,
-                              border: Border.all(
-                                color: currentColor,
-                                width: 3,
-                              ),
+                            ),
+                          ),
+                          // Inner blue dot
+                          Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: currentColor,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.3),
-                                  blurRadius: 8,
-                                  spreadRadius: 2,
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 4,
+                                  spreadRadius: 1,
                                 ),
                               ],
                             ),
-                            child: Center(
-                              child: Icon(
-                                _travelModeIcons[_selectedTravelMode] ?? Icons.navigation,
-                                color: currentColor,
-                                size: 20,
+                          ),
+                          // Direction indicator (like Google Maps)
+                          if (_currentSpeed > 0.5)
+                            Positioned(
+                              top: 0,
+                              child: Transform.rotate(
+                                angle: _heading * pi / 180,
+                                child: Container(
+                                  width: 4,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(1),
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
-                        ),
+                        ],
                       ),
                     ),
 
-                  // Destination marker
+                  // Google Maps Style Destination Marker
                   if (_destination != null)
                     Marker(
                       point: _destination!,
                       width: 40,
                       height: 40,
                       child: Stack(
+                        clipBehavior: Clip.none,
                         children: [
-                          const Icon(
-                            Icons.location_pin,
-                            color: Colors.red,
-                            size: 40,
-                          ),
+                          if (!_hasArrived)
+                            const Icon(
+                              Icons.location_pin,
+                              color: Colors.red,
+                              size: 40,
+                            ),
                           if (_hasArrived)
-                            Positioned(
-                              right: 0,
-                              top: 0,
-                              child: Container(
-                                padding: const EdgeInsets.all(4),
-                                decoration: const BoxDecoration(
-                                  color: Colors.green,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.check,
-                                  color: Colors.white,
-                                  size: 12,
-                                ),
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 20,
                               ),
                             ),
                         ],
@@ -1161,7 +1429,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ],
           ),
 
-          // Navigation Header
+          // Navigation Header (Google Maps Style)
           if (_isNavigating && _destination != null && !_hasArrived)
             Positioned(
               top: 0,
@@ -1290,147 +1558,27 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // Nearby Landmarks Card
-          if (_isNavigating && _nearbyLandmarks.isNotEmpty)
+          // Clickable Buttons for Route and Landmarks
+          if (_isNavigating && !_hasArrived)
             Positioned(
               top: _isNavigating ? 200 : 16,
               left: 16,
-              right: 80,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 10,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Along the way',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ..._nearbyLandmarks.take(3).map((landmark) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            _getLandmarkIcon(landmark['type']),
-                            size: 16,
-                            color: Colors.grey.shade600,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              landmark['name'],
-                              style: const TextStyle(fontSize: 13),
-                            ),
-                          ),
-                          Text(
-                            landmark['distance'],
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )),
-                  ],
-                ),
-              ),
-            ),
-
-          // Route Segments Card
-          if (_isNavigating && _routeSegments.isNotEmpty)
-            Positioned(
-              bottom: 100,
-              left: 16,
-              right: 80,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 10,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Route',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ..._routeSegments.map((segment) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 20,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              color: currentColor.withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: Icon(
-                                Icons.arrow_forward,
-                                size: 12,
-                                color: currentColor,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              segment['instruction'],
-                              style: const TextStyle(fontSize: 13),
-                            ),
-                          ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                segment['distance'],
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                segment['time'],
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    )),
-                  ],
-                ),
+              child: Row(
+                children: [
+                  _buildActionButton(
+                    icon: Icons.route,
+                    label: 'Route',
+                    color: currentColor,
+                    onPressed: _showRouteBottomSheet,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildActionButton(
+                    icon: Icons.place,
+                    label: 'Along the way',
+                    color: Colors.green,
+                    onPressed: _showLandmarksBottomSheet,
+                  ),
+                ],
               ),
             ),
 
@@ -1610,14 +1758,55 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.grey.shade800,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   IconData _getLandmarkIcon(String type) {
     switch (type) {
-      case 'mall': return Icons.shopping_bag; // Fixed from shopping_mail
+      case 'mall': return Icons.shopping_bag;
       case 'shop': return Icons.shop;
       case 'cafe': return Icons.local_cafe;
       case 'restaurant': return Icons.restaurant;
       case 'market': return Icons.store;
-      case 'landmark': return Icons.location_city; // Fixed from landmark
+      case 'landmark': return Icons.location_city;
+      case 'street': return Icons.road;
       default: return Icons.place;
     }
   }
