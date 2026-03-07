@@ -94,9 +94,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   int _currentRouteIndex = 0;
   bool _turnNotifiedForCurrentSegment = false;
 
-  // Flag to track if user has started moving towards destination
-  bool _hasStartedMovingToDestination = false;
-
   static const int updateIntervalMs = 100;
   static const int markerAnimationDurationMs = 500;
   static const int turnNotificationDurationMs = 4000;
@@ -315,11 +312,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 _updateNavigationInstructions();
                 _updateRemainingRoute(position);
                 _checkForTurn(position);
-
-                // Check if user has started moving towards destination
-                if (!_hasStartedMovingToDestination && _remainingRoute.isNotEmpty) {
-                  _hasStartedMovingToDestination = true;
-                }
               }
 
               if (_isTracking) {
@@ -523,7 +515,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _destination!.longitude,
     );
 
-    // Check if user has reached the destination
     if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
       _handleArrival();
     }
@@ -537,12 +528,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _showTurnNotificationPopup = false;
     });
 
-    // Show arrival dialog
-    _showArrivalDialog();
-
-    // If currently tracking, finish the activity
     if (_isTracking) {
       _autoStopTracking();
+    } else {
+      _showArrivalDialog();
     }
   }
 
@@ -553,13 +542,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     await _activityService.finishActivity();
 
+    _showArrivalDialog();
+
     await Future.delayed(const Duration(milliseconds: 500));
 
     if (mounted) {
       _showActivitySummary();
     }
 
-    // Reset navigation state after summary
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
@@ -574,7 +564,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _showTurnNotificationPopup = false;
           _currentRouteIndex = 0;
           _turnNotifiedForCurrentSegment = false;
-          _hasStartedMovingToDestination = false;
         });
       }
     });
@@ -600,7 +589,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _lastTimeForSpeed = null;
       _currentRouteIndex = 0;
       _turnNotifiedForCurrentSegment = false;
-      _hasStartedMovingToDestination = true; // User has started moving
     });
 
     _stopwatch.reset();
@@ -630,22 +618,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  // When destination is set but not tracking, only show Cancel button
-  void _cancelDestination() {
-    setState(() {
-      _destination = null;
-      _remainingRoute = [];
-      _routeSegments = [];
-      _routePlaces = [];
-      _isNavigating = false;
-      _hasArrived = false;
-      _arrivalNotified = false;
-      _showTurnNotificationPopup = false;
-      _hasStartedMovingToDestination = false;
-    });
-  }
-
-  // Only used when tracking without destination
   void _stopTracking() async {
     _stopwatch.stop();
     _timer?.cancel();
@@ -656,17 +628,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     setState(() {
       _isTracking = false;
       _isNavigating = false;
-      _currentDistance = 0;
-      _currentDuration = 0;
-      _currentSpeed = 0;
-      _maxSpeed = 0;
-      _averageSpeed = 0;
+      _destination = null;
+      _remainingRoute = [];
+      _hasArrived = false;
+      _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
       _showTurnNotificationPopup = false;
       _currentRouteIndex = 0;
       _turnNotifiedForCurrentSegment = false;
-      _hasStartedMovingToDestination = false;
     });
 
     if (mounted) {
@@ -674,7 +644,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  // Only used when tracking without destination
   void _cancelTracking() {
     _stopwatch.stop();
     _timer?.cancel();
@@ -684,17 +653,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     setState(() {
       _isTracking = false;
       _isNavigating = false;
+      _destination = null;
+      _remainingRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
       _currentSpeed = 0;
       _maxSpeed = 0;
       _averageSpeed = 0;
+      _hasArrived = false;
+      _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
       _showTurnNotificationPopup = false;
       _currentRouteIndex = 0;
       _turnNotifiedForCurrentSegment = false;
-      _hasStartedMovingToDestination = false;
     });
   }
 
@@ -801,7 +773,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _arrivalNotified = false;
         _currentRouteIndex = 0;
         _turnNotifiedForCurrentSegment = false;
-        _hasStartedMovingToDestination = false;
       });
       _calculateRoute();
 
@@ -1610,7 +1581,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // SMALLER Live Tracking Stats Card (only shown when tracking)
+          // SMALLER Live Tracking Stats Card (compact design)
           if (_isTracking)
             Positioned(
               top: _isNavigating ? 180 : 16,
@@ -1759,10 +1730,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // Route Button - only shown when destination is set but not tracking
-          if (_isNavigating && !_isTracking && !_hasArrived)
+          // Route Button
+          if (_isNavigating && !_hasArrived)
             Positioned(
-              top: 240,
+              top: _isTracking ? 240 : 200,
               left: 16,
               child: _buildActionButton(
                 icon: Icons.route,
@@ -1797,11 +1768,26 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     );
                   }, color: Colors.red),
                 ],
+                if (_isNavigating && !_isTracking) ...[
+                  const SizedBox(height: 8),
+                  _buildControlButton(Icons.close, () {
+                    setState(() {
+                      _destination = null;
+                      _remainingRoute = [];
+                      _routeSegments = [];
+                      _routePlaces = [];
+                      _isNavigating = false;
+                      _hasArrived = false;
+                      _arrivalNotified = false;
+                      _showTurnNotificationPopup = false;
+                    });
+                  }, color: Colors.red),
+                ],
               ],
             ),
           ),
 
-          // Bottom Buttons - Different based on state
+          // Start/Stop Buttons
           Positioned(
             bottom: 32,
             left: 0,
@@ -1822,24 +1808,21 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Case 1: Destination set but not tracking - ONLY Cancel button
-                    if (_isNavigating && !_isTracking && !_hasArrived)
-                      OutlinedButton(
-                        onPressed: _cancelDestination,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red,
-                          side: const BorderSide(color: Colors.red),
+                    if (!_isTracking)
+                      ElevatedButton(
+                        onPressed: _currentPosition != null ? _startTracking : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: currentColor,
+                          foregroundColor: Colors.white,
                           minimumSize: const Size(100, 36),
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(20),
                           ),
                         ),
-                        child: const Text('Cancel'),
+                        child: const Text('Start'),
                       ),
-
-                    // Case 2: Tracking without destination - Show Finish and Cancel
-                    if (_isTracking && !_isNavigating) ...[
+                    if (_isTracking) ...[
                       ElevatedButton(
                         onPressed: _stopTracking,
                         style: ElevatedButton.styleFrom(
@@ -1868,38 +1851,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         child: const Text('Cancel'),
                       ),
                     ],
-
-                    // Case 3: Tracking with destination - Only show Cancel button (arrival auto-finishes)
-                    if (_isTracking && _isNavigating)
-                      OutlinedButton(
-                        onPressed: _cancelTracking,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red,
-                          side: const BorderSide(color: Colors.red),
-                          minimumSize: const Size(100, 36),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Cancel'),
-                      ),
-
-                    // Case 4: No destination and not tracking - Show Start button
-                    if (!_isTracking && !_isNavigating)
-                      ElevatedButton(
-                        onPressed: _currentPosition != null ? _startTracking : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: currentColor,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(100, 36),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Start'),
-                      ),
                   ],
                 ),
               ),
