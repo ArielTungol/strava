@@ -121,7 +121,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     {'name': 'Kiri Café', 'type': 'cafe', 'distance': '1.4 km', 'icon': Icons.local_cafe},
     {'name': 'Yamaha 3S Shop', 'type': 'shop', 'distance': '1.5 km', 'icon': Icons.shop},
     {'name': 'Arayat Public Market', 'type': 'market', 'distance': '1.6 km', 'icon': Icons.store},
-    {'name': 'Riverside St', 'type': 'street', 'distance': '1.7 km', 'icon': Icons.road},
+    {'name': 'Riverside St', 'type': 'street', 'distance': '1.7 km', 'icon': Icons.add_road_outlined},
     {'name': 'Richsun Home Center', 'type': 'shop', 'distance': '1.8 km', 'icon': Icons.shop},
     {'name': 'CityMall Arayat', 'type': 'mall', 'distance': '1.9 km', 'icon': Icons.shopping_bag},
   ];
@@ -1806,7 +1806,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       case 'restaurant': return Icons.restaurant;
       case 'market': return Icons.store;
       case 'landmark': return Icons.location_city;
-      case 'street': return Icons.road;
+      case 'street': return Icons.add_road;
       default: return Icons.place;
     }
   }
