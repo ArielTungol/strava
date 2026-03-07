@@ -27,6 +27,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Current location tracking
   LatLng? _currentPosition;
+  LatLng? _previousPosition;
   LatLng? _destination;
 
   // Route data
@@ -41,7 +42,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   bool _isTracking = false;
   bool _isSelectingDestination = false;
   bool _isNavigating = false;
-  String _selectedActivity = 'driving'; // Default to driving like Google Maps
+  String _selectedActivity = 'running'; // Removed driving option
   bool _locationPermissionGranted = false;
   bool _isLoadingLocation = true;
 
@@ -50,8 +51,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   double _totalDuration = 0;
   String _formattedEta = "";
   String _formattedTotalDistance = "";
-  String _nextInstruction = "";
-  double _distanceToNextTurn = 0;
 
   // Arrival detection
   bool _hasArrived = false;
@@ -60,38 +59,39 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Live tracking metrics
   double _currentSpeed = 0;
-  double _currentDistance = 0;
-  double _currentDuration = 0;
+  double _currentDistance = 0; // in km
+  double _currentDuration = 0; // in seconds
   double _maxSpeed = 0;
   double _averageSpeed = 0;
   String _formattedPace = "--:--";
 
   Timer? _timer;
   Stopwatch _stopwatch = Stopwatch();
+  LatLng? _lastPositionForDistance;
+  DateTime? _lastTimeForSpeed;
 
-  // For smooth location updates - GOOGLE MAPS LIKE
+  // For smooth location updates
   StreamSubscription<geolocator.Position>? _positionSubscription;
 
   // Animation for smooth marker movement
   AnimationController? _markerAnimationController;
   LatLng? _targetPosition;
   LatLng? _currentAnimatedPosition;
-  double _heading = 0.0; // For marker rotation
+  double _heading = 0.0;
 
-  static const int MARKER_ANIMATION_DURATION_MS = 300; // Smooth animation
+  static const int UPDATE_INTERVAL_MS = 100;
+  static const int MARKER_ANIMATION_DURATION_MS = 300;
 
-  final Map<String, IconData> _activityIcons = {
-    'driving': Icons.directions_car,
-    'running': Icons.directions_run,
-    'walking': Icons.directions_walk,
-    'cycling': Icons.directions_bike,
+  final Map<ActivityType, IconData> _activityIcons = {
+    ActivityType.running: Icons.directions_run,
+    ActivityType.walking: Icons.directions_walk,
+    ActivityType.cycling: Icons.directions_bike,
   };
 
-  final Map<String, Color> _activityColors = {
-    'driving': Colors.blue,
-    'running': Colors.orange,
-    'walking': Colors.green,
-    'cycling': Colors.purple,
+  final Map<ActivityType, Color> _activityColors = {
+    ActivityType.running: Colors.orange,
+    ActivityType.walking: Colors.green,
+    ActivityType.cycling: Colors.blue,
   };
 
   @override
@@ -162,6 +162,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _timer?.cancel();
     _positionSubscription?.cancel();
     _markerAnimationController?.dispose();
+    _stopwatch.stop();
     _locationService.dispose();
     super.dispose();
   }
@@ -172,17 +173,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     bool permissionGranted = await _locationService.checkAndRequestPermission();
 
     if (permissionGranted) {
-      // Get initial position immediately
+      // Get initial position
       LatLng? location = await _locationService.getCurrentLocation();
 
       setState(() {
         _currentPosition = location ?? widget.currentLocation;
         _currentAnimatedPosition = _currentPosition;
+        _previousPosition = _currentPosition;
         _locationPermissionGranted = true;
         _isLoadingLocation = false;
       });
 
-      // Center map on location immediately - LIKE GOOGLE MAPS
+      // Center map on location
       if (_currentPosition != null) {
         _mapController.move(_currentPosition!, 16);
       }
@@ -226,57 +228,69 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _positionSubscription = geolocator.Geolocator.getPositionStream(
       locationSettings: const geolocator.LocationSettings(
         accuracy: geolocator.LocationAccuracy.bestForNavigation,
-        distanceFilter: 0, // Update on EVERY movement for smooth animation - LIKE GOOGLE MAPS
+        distanceFilter: 0, // Update on EVERY movement
       ),
     ).listen((geolocator.Position position) {
+      if (!mounted) return;
+
       final newPosition = LatLng(position.latitude, position.longitude);
 
-      // Animate marker to new position - SMOOTH LIKE GOOGLE MAPS
+      // Store previous position
+      if (_currentPosition != null) {
+        _previousPosition = _currentPosition;
+      }
+
+      // Animate marker to new position
       _animateMarkerToNewPosition(newPosition);
 
       setState(() {
         _currentPosition = newPosition;
         _currentSpeed = position.speed;
 
+        // Update max speed
+        if (_currentSpeed > _maxSpeed) {
+          _maxSpeed = _currentSpeed;
+        }
+
         // Check if arrived at destination
         if (_destination != null && !_hasArrived) {
           _checkArrival();
-
-          // Update ETA
-          if (_totalDuration > 0) {
-            double remainingDistance = 0;
-            if (_remainingRoute.isNotEmpty) {
-              for (int i = 0; i < _remainingRoute.length - 1; i++) {
-                remainingDistance += geolocator.Geolocator.distanceBetween(
-                  _remainingRoute[i].latitude,
-                  _remainingRoute[i].longitude,
-                  _remainingRoute[i + 1].latitude,
-                  _remainingRoute[i + 1].longitude,
-                );
-              }
-            }
-            double remainingDuration = (remainingDistance / _totalDistance) * _totalDuration;
-            DateTime eta = DateTime.now().add(Duration(seconds: remainingDuration.round()));
-            _formattedEta = _formatTime(eta);
-          }
         }
 
         if (_isTracking) {
           // Add to tracked route
           _trackedRoute.add(newPosition);
 
-          // Update distance
-          if (_trackedRoute.length > 1) {
-            double distance = geolocator.Geolocator.distanceBetween(
-              _trackedRoute[_trackedRoute.length - 2].latitude,
-              _trackedRoute[_trackedRoute.length - 2].longitude,
+          // Calculate distance
+          if (_lastPositionForDistance != null) {
+            double segmentDistance = geolocator.Geolocator.distanceBetween(
+              _lastPositionForDistance!.latitude,
+              _lastPositionForDistance!.longitude,
               newPosition.latitude,
               newPosition.longitude,
             );
-            _currentDistance += distance / 1000; // Convert to km
+
+            // Update distance (convert to km)
+            _currentDistance += segmentDistance / 1000;
+
+            // Calculate speed from time and distance
+            if (_lastTimeForSpeed != null) {
+              Duration timeDiff = DateTime.now().difference(_lastTimeForSpeed!);
+              if (timeDiff.inMilliseconds > 0) {
+                double calculatedSpeed = segmentDistance / (timeDiff.inMilliseconds / 1000);
+                _currentSpeed = calculatedSpeed;
+
+                if (calculatedSpeed > _maxSpeed) {
+                  _maxSpeed = calculatedSpeed;
+                }
+              }
+            }
           }
 
-          // Update remaining route - remove passed segments
+          _lastPositionForDistance = newPosition;
+          _lastTimeForSpeed = DateTime.now();
+
+          // Update remaining route
           if (_fullRoute.isNotEmpty) {
             _updateRemainingRoute(newPosition);
           }
@@ -289,7 +303,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           );
         }
 
-        // Always follow user when navigating but not tracking - LIKE GOOGLE MAPS
+        // Follow user when navigating
         if (_isNavigating && !_isTracking && !_hasArrived) {
           _mapController.move(newPosition, 16);
         }
@@ -318,32 +332,19 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       }
     }
 
-    // Mark points as passed if they're behind us
-    if (minDistance < 30) { // Within 30 meters of the route
+    // Mark points as passed if close to the route
+    if (minDistance < 30) {
       setState(() {
-        // Add all points up to closestIndex to passed points
+        // Add points up to closestIndex to passed points
         for (int i = 0; i <= closestIndex; i++) {
           _passedPointsIndices.add(i);
         }
 
-        // Rebuild remaining route excluding passed points - THIS MAKES THE LINE DISAPPEAR
+        // Rebuild remaining route
         _remainingRoute = [];
         for (int i = 0; i < _fullRoute.length; i++) {
           if (!_passedPointsIndices.contains(i)) {
             _remainingRoute.add(_fullRoute[i]);
-          }
-        }
-
-        // Calculate distance to next turn
-        if (_remainingRoute.length > 1) {
-          _distanceToNextTurn = 0;
-          for (int i = 0; i < min(5, _remainingRoute.length - 1); i++) {
-            _distanceToNextTurn += geolocator.Geolocator.distanceBetween(
-              _remainingRoute[i].latitude,
-              _remainingRoute[i].longitude,
-              _remainingRoute[i + 1].latitude,
-              _remainingRoute[i + 1].longitude,
-            );
           }
         }
       });
@@ -380,22 +381,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _autoStopTracking() async {
-    await _activityService.finishActivity();
+    _stopwatch.stop();
     _timer?.cancel();
+
+    await _activityService.finishActivity();
 
     _showArrivalDialog();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Activity completed! ${_formatDistance(_currentDistance * 1000)} in ${_formatDuration(_currentDuration)}'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      _showActivitySummary();
     }
 
-    // Reset after showing completion
+    // Reset after delay
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
         setState(() {
@@ -410,6 +407,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _arrivalNotified = false;
           _currentDistance = 0;
           _currentDuration = 0;
+          _maxSpeed = 0;
+          _averageSpeed = 0;
+          _formattedPace = "--:--";
+          _lastPositionForDistance = null;
+          _lastTimeForSpeed = null;
         });
       }
     });
@@ -466,6 +468,51 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
+  void _showActivitySummary() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Activity Completed! 🎉'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildSummaryRow('Distance', _formatDistance(_currentDistance * 1000)),
+              const Divider(),
+              _buildSummaryRow('Duration', _formatDuration(_currentDuration)),
+              const Divider(),
+              _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed)),
+              const Divider(),
+              _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed)),
+              const Divider(),
+              _buildSummaryRow('Avg Pace', _formattedPace),
+            ],
+          ),
+          actions: [
+            TextButton(
+              child: const Text('OK'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSummaryRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+        ],
+      ),
+    );
+  }
+
   void _startTracking() {
     ActivityType type;
     switch (_selectedActivity) {
@@ -479,7 +526,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         type = ActivityType.cycling;
         break;
       default:
-        type = ActivityType.walking;
+        type = ActivityType.running;
     }
 
     _activityService.startNewActivity(
@@ -494,10 +541,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _passedPointsIndices.clear();
       _currentDistance = 0;
       _currentDuration = 0;
+      _currentSpeed = 0;
+      _maxSpeed = 0;
+      _averageSpeed = 0;
+      _formattedPace = "--:--";
       _hasArrived = false;
       _arrivalNotified = false;
+      _lastPositionForDistance = null;
+      _lastTimeForSpeed = null;
 
-      // Initialize remaining route as full route
       if (_fullRoute.isNotEmpty) {
         _remainingRoute = List.from(_fullRoute);
       }
@@ -506,17 +558,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _stopwatch.reset();
     _stopwatch.start();
 
-    // Start timer for duration - smooth updates
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    // Update duration every 100ms for smooth display
+    _timer = Timer.periodic(const Duration(milliseconds: UPDATE_INTERVAL_MS), (timer) {
       if (_isTracking && mounted) {
         setState(() {
           _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
 
-          // Calculate average speed
           if (_currentDuration > 0 && _currentDistance > 0) {
             _averageSpeed = (_currentDistance * 1000) / _currentDuration;
 
-            // Calculate pace
             if (_averageSpeed > 0) {
               double paceMinPerKm = 1000 / (_averageSpeed * 60);
               if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
@@ -532,9 +582,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _stopTracking() async {
-    await _activityService.finishActivity();
-    _timer?.cancel();
     _stopwatch.stop();
+    _timer?.cancel();
+
+    await _activityService.finishActivity();
 
     setState(() {
       _isTracking = false;
@@ -549,19 +600,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Activity saved! ${_formatDistance(_currentDistance * 1000)} in ${_formatDuration(_currentDuration)}'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      _showActivitySummary();
     }
   }
 
   void _cancelTracking() {
-    _activityService.cancelActivity();
-    _timer?.cancel();
     _stopwatch.stop();
+    _timer?.cancel();
+    _activityService.cancelActivity();
 
     setState(() {
       _isTracking = false;
@@ -573,8 +619,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _passedPointsIndices.clear();
       _currentDistance = 0;
       _currentDuration = 0;
+      _currentSpeed = 0;
+      _maxSpeed = 0;
+      _averageSpeed = 0;
+      _formattedPace = "--:--";
       _hasArrived = false;
       _arrivalNotified = false;
+      _lastPositionForDistance = null;
+      _lastTimeForSpeed = null;
     });
   }
 
@@ -632,6 +684,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  String _formatSpeed(double speed) {
+    return '${speed.toStringAsFixed(1)} m/s';
+  }
+
   String _formatTime(DateTime time) {
     int hour = time.hour;
     int minute = time.minute;
@@ -648,7 +704,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     final route = await OSRMService.getRoute(_currentPosition!, _destination!);
 
-    // Get route details for ETA
+    // Get route details
     final details = await OSRMService.getRouteDetails(_currentPosition!, _destination!);
 
     setState(() {
@@ -664,7 +720,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
 
     if (route.isNotEmpty && mounted) {
-      // Fit map to show entire route - LIKE GOOGLE MAPS
       double minLat = route.map((p) => p.latitude).reduce((a, b) => a < b ? a : b);
       double maxLat = route.map((p) => p.latitude).reduce((a, b) => a > b ? a : b);
       double minLng = route.map((p) => p.longitude).reduce((a, b) => a < b ? a : b);
@@ -685,7 +740,22 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    Color currentColor = _activityColors[_selectedActivity] ?? Colors.blue;
+    ActivityType currentType;
+    switch (_selectedActivity) {
+      case 'running':
+        currentType = ActivityType.running;
+        break;
+      case 'walking':
+        currentType = ActivityType.walking;
+        break;
+      case 'cycling':
+        currentType = ActivityType.cycling;
+        break;
+      default:
+        currentType = ActivityType.running;
+    }
+
+    Color currentColor = _activityColors[currentType] ?? Colors.blue;
 
     if (_isLoadingLocation) {
       return const Scaffold(
@@ -742,10 +812,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               icon: const Icon(Icons.sports_score),
               onSelected: (value) => setState(() => _selectedActivity = value),
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'driving', child: Row(children: [Icon(Icons.directions_car, color: Colors.blue), SizedBox(width: 8), Text('Driving')])),
                 const PopupMenuItem(value: 'running', child: Row(children: [Icon(Icons.directions_run, color: Colors.orange), SizedBox(width: 8), Text('Running')])),
                 const PopupMenuItem(value: 'walking', child: Row(children: [Icon(Icons.directions_walk, color: Colors.green), SizedBox(width: 8), Text('Walking')])),
-                const PopupMenuItem(value: 'cycling', child: Row(children: [Icon(Icons.directions_bike, color: Colors.purple), SizedBox(width: 8), Text('Cycling')])),
+                const PopupMenuItem(value: 'cycling', child: Row(children: [Icon(Icons.directions_bike, color: Colors.blue), SizedBox(width: 8), Text('Cycling')])),
               ],
             ),
         ],
@@ -767,7 +836,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 userAgentPackageName: 'com.example.strava',
               ),
 
-              // Full route (faint gray) - background reference
+              // Full route (faint gray)
               if (_fullRoute.isNotEmpty && !_hasArrived)
                 PolylineLayer(
                   polylines: [
@@ -779,19 +848,19 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
 
-              // Remaining route (bright blue) - LIKE GOOGLE MAPS - DISAPPEARS AS YOU PASS
+              // Remaining route (bright colored) - DISAPPEARS AS YOU PASS
               if (_remainingRoute.isNotEmpty && !_hasArrived && _isNavigating)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _remainingRoute,
-                      color: Colors.blue.withValues(alpha: 0.8),
+                      color: currentColor.withValues(alpha: 0.8),
                       strokeWidth: 6,
                     ),
                   ],
                 ),
 
-              // Tracked route (your path) - lighter color
+              // Tracked route (your path)
               if (_trackedRoute.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -803,7 +872,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
 
-              // Current position marker - GOOGLE MAPS LIKE BLUE DOT
+              // Current position marker - ANIMATED
               MarkerLayer(
                 markers: [
                   if (_currentAnimatedPosition != null)
@@ -817,33 +886,32 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
-                            // Outer pulse effect - LIKE GOOGLE MAPS
+                            // Outer pulse
                             Container(
                               width: 24,
                               height: 24,
                               decoration: BoxDecoration(
-                                color: Colors.blue.withValues(alpha: 0.2),
+                                color: currentColor.withValues(alpha: 0.2),
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            // Inner blue dot
+                            // Inner dot
                             Container(
                               width: 16,
                               height: 16,
                               decoration: BoxDecoration(
-                                color: Colors.blue,
+                                color: currentColor,
                                 shape: BoxShape.circle,
                                 border: Border.all(color: Colors.white, width: 2),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.black.withValues(alpha: 0.2),
                                     blurRadius: 4,
-                                    spreadRadius: 1,
                                   ),
                                 ],
                               ),
                             ),
-                            // Small white dot in center for direction indicator
+                            // Direction indicator
                             if (_currentSpeed > 0.5)
                               Positioned(
                                 top: 2,
@@ -864,7 +932,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       ),
                     ),
 
-                  // Destination marker - RED PIN LIKE GOOGLE MAPS
+                  // Destination marker
                   if (_destination != null)
                     Marker(
                       point: _destination!,
@@ -885,7 +953,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ],
           ),
 
-          // Navigation Header - LIKE GOOGLE MAPS
+          // Navigation Header
           if (_isNavigating && _destination != null && !_hasArrived)
             Positioned(
               top: 0,
@@ -940,7 +1008,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           ),
                           child: Row(
                             children: [
-                              Icon(_activityIcons[_selectedActivity], size: 16, color: currentColor),
+                              Icon(_activityIcons[currentType], size: 16, color: currentColor),
                               const SizedBox(width: 4),
                               Text(
                                 _selectedActivity.capitalize(),
@@ -954,26 +1022,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         ),
                       ],
                     ),
-                    if (_distanceToNextTurn > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Row(
-                          children: [
-                            Icon(Icons.turn_right, size: 16, color: Colors.grey.shade600),
-                            const SizedBox(width: 4),
-                            Text(
-                              'In ${_formatDistance(_distanceToNextTurn)}',
-                              style: TextStyle(color: Colors.grey.shade600),
-                            ),
-                          ],
-                        ),
-                      ),
                   ],
                 ),
               ),
             ),
 
-          // Controls overlay (right side) - LIKE GOOGLE MAPS
+          // Controls overlay
           Positioned(
             bottom: 100,
             right: 16,
@@ -1021,8 +1075,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 distance: _currentDistance,
                 duration: _currentDuration,
                 speed: _currentSpeed,
-                type: ActivityType.values.firstWhere((e) => e.toString() == 'ActivityType.${_selectedActivity}',
-                    orElse: () => ActivityType.running),
+                type: currentType,
               ),
             ),
 
