@@ -32,10 +32,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   LatLng? _destination;
 
   // Route data
-  List<LatLng> _fullRoute = [];
-  List<LatLng> _trackedRoute = [];
+  List<LatLng> _remainingRoute = [];
   List<Map<String, dynamic>> _routeInstructions = [];
-  List<Map<String, dynamic>> _nearbyLandmarks = [];
+  List<Map<String, dynamic>> _routeSegments = [];
+  List<String> _routePlaces = [];
 
   // Navigation state
   bool _isTracking = false;
@@ -46,9 +46,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   bool _isLoadingLocation = true;
   String _locationError = '';
 
-  // Bottom sheet state
-  bool _showRouteSheet = false;
-  bool _showLandmarksSheet = false;
+  // Turn notification
+  bool _showTurnNotificationPopup = false;
+  String _currentTurnInstruction = "";
+  String _currentTurnDistance = "";
+  IconData _currentTurnIcon = Icons.arrow_forward;
+  Timer? _turnNotificationTimer;
 
   // Arrival detection
   bool _hasArrived = false;
@@ -64,7 +67,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   String _formattedEta = "";
   String _formattedTotalDistance = "";
   String _formattedTotalDuration = "";
-  List<Map<String, dynamic>> _routeSegments = [];
 
   // Live tracking metrics
   double _currentSpeed = 0;
@@ -72,7 +74,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   double _currentDuration = 0;
   double _maxSpeed = 0;
   double _averageSpeed = 0;
-  String _formattedPace = "--:--";
 
   // For tracking movement with drift protection
   LatLng? _lastPositionForDistance;
@@ -89,8 +90,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   LatLng? _targetPosition;
   LatLng? _currentAnimatedPosition;
 
+  // Turn detection
+  int _currentRouteIndex = 0;
+  bool _turnNotifiedForCurrentSegment = false;
+
+  // Flag to track if user has started moving towards destination
+  bool _hasStartedMovingToDestination = false;
+
   static const int updateIntervalMs = 100;
   static const int markerAnimationDurationMs = 500;
+  static const int turnNotificationDurationMs = 4000;
 
   final Map<String, IconData> _travelModeIcons = {
     'driving': Icons.directions_car,
@@ -103,28 +112,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     'walking': Colors.green,
     'cycling': Colors.orange,
   };
-
-  // Mock nearby landmarks
-  final List<Map<String, dynamic>> _mockLandmarks = [
-    {'name': 'WalterMart Arayat', 'type': 'mall', 'distance': '0.2 km', 'icon': Icons.shopping_bag},
-    {'name': '1st Honor Pasalubong', 'type': 'shop', 'distance': '0.3 km', 'icon': Icons.shop},
-    {'name': 'Kapet Silim - ARAYAT', 'type': 'cafe', 'distance': '0.4 km', 'icon': Icons.local_cafe},
-    {'name': 'Project Ohms Vape Shop', 'type': 'shop', 'distance': '0.5 km', 'icon': Icons.shop},
-    {'name': "McDonald's Arayat", 'type': 'restaurant', 'distance': '0.6 km', 'icon': Icons.restaurant},
-    {'name': 'MR. DIY', 'type': 'shop', 'distance': '0.7 km', 'icon': Icons.shop},
-    {'name': 'Irrigation Canal', 'type': 'landmark', 'distance': '0.8 km', 'icon': Icons.location_city},
-    {'name': 'Adabbia', 'type': 'restaurant', 'distance': '0.9 km', 'icon': Icons.restaurant},
-    {'name': 'Puregold Arayat', 'type': 'mall', 'distance': '1.0 km', 'icon': Icons.shopping_bag},
-    {'name': 'Honda Motor Sports', 'type': 'shop', 'distance': '1.1 km', 'icon': Icons.shop},
-    {'name': 'Cemetery', 'type': 'landmark', 'distance': '1.2 km', 'icon': Icons.location_city},
-    {'name': 'Soupy Buns', 'type': 'restaurant', 'distance': '1.3 km', 'icon': Icons.restaurant},
-    {'name': 'Kiri Café', 'type': 'cafe', 'distance': '1.4 km', 'icon': Icons.local_cafe},
-    {'name': 'Yamaha 3S Shop', 'type': 'shop', 'distance': '1.5 km', 'icon': Icons.shop},
-    {'name': 'Arayat Public Market', 'type': 'market', 'distance': '1.6 km', 'icon': Icons.store},
-    {'name': 'Riverside St', 'type': 'street', 'distance': '1.7 km', 'icon': Icons.add_road_outlined},
-    {'name': 'Richsun Home Center', 'type': 'shop', 'distance': '1.8 km', 'icon': Icons.shop},
-    {'name': 'CityMall Arayat', 'type': 'mall', 'distance': '1.9 km', 'icon': Icons.shopping_bag},
-  ];
 
   @override
   void initState() {
@@ -249,8 +236,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       while (position == null && attempts < maxAttempts) {
         try {
           position = await geolocator.Geolocator.getCurrentPosition(
-            desiredAccuracy: geolocator.LocationAccuracy.best,
-            timeLimit: const Duration(seconds: 5),
+            locationSettings: const geolocator.LocationSettings(
+              accuracy: geolocator.LocationAccuracy.best,
+              timeLimit: Duration(seconds: 5),
+            ),
           );
         } catch (e) {
           attempts++;
@@ -261,7 +250,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       }
 
       if (position != null) {
-        final initialPosition = LatLng(position!.latitude, position!.longitude);
+        final initialPosition = LatLng(position.latitude, position.longitude);
         setState(() {
           _currentPosition = initialPosition;
           _stablePosition = initialPosition;
@@ -324,11 +313,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               if (_destination != null && !_hasArrived) {
                 _checkArrival();
                 _updateNavigationInstructions();
+                _updateRemainingRoute(position);
+                _checkForTurn(position);
+
+                // Check if user has started moving towards destination
+                if (!_hasStartedMovingToDestination && _remainingRoute.isNotEmpty) {
+                  _hasStartedMovingToDestination = true;
+                }
               }
 
               if (_isTracking) {
-                _trackedRoute.add(position);
-
                 if (_lastPositionForDistance != null) {
                   double segmentDistance = geolocator.Geolocator.distanceBetween(
                     _lastPositionForDistance!.latitude,
@@ -385,17 +379,123 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  void _checkForTurn(LatLng currentPosition) {
+    if (_remainingRoute.length < 3 || _turnNotifiedForCurrentSegment) return;
+
+    // Get current direction and next direction
+    LatLng currentPoint = _remainingRoute[0];
+    LatLng nextPoint = _remainingRoute[1];
+    LatLng futurePoint = _remainingRoute[2];
+
+    double currentBearing = _calculateBearing(currentPoint, nextPoint);
+    double nextBearing = _calculateBearing(nextPoint, futurePoint);
+
+    // Calculate turn angle
+    double turnAngle = nextBearing - currentBearing;
+    if (turnAngle > 180) turnAngle -= 360;
+    if (turnAngle < -180) turnAngle += 360;
+
+    // Calculate distance to turn
+    double distanceToTurn = geolocator.Geolocator.distanceBetween(
+      currentPosition.latitude,
+      currentPosition.longitude,
+      nextPoint.latitude,
+      nextPoint.longitude,
+    );
+
+    // Show turn notification when approaching a turn (within 50 meters)
+    if (distanceToTurn < 50 && turnAngle.abs() > 20 && !_turnNotifiedForCurrentSegment) {
+      String instruction = _getTurnInstruction(turnAngle);
+      IconData icon = _getTurnIcon(turnAngle);
+      String distanceStr = _formatDistance(distanceToTurn);
+
+      _showTurnNotificationPopupMethod(instruction, distanceStr, icon);
+      _turnNotifiedForCurrentSegment = true;
+    }
+  }
+
+  String _getTurnInstruction(double turnAngle) {
+    if (turnAngle.abs() < 20) return "Continue straight";
+    if (turnAngle > 20 && turnAngle < 60) return "Turn slight right";
+    if (turnAngle >= 60 && turnAngle < 150) return "Turn right";
+    if (turnAngle >= 150) return "Make a U-turn";
+    if (turnAngle < -20 && turnAngle > -60) return "Turn slight left";
+    if (turnAngle <= -60 && turnAngle > -150) return "Turn left";
+    return "Continue";
+  }
+
+  IconData _getTurnIcon(double turnAngle) {
+    if (turnAngle.abs() < 20) return Icons.arrow_upward;
+    if (turnAngle > 20 && turnAngle < 60) return Icons.turn_right;
+    if (turnAngle >= 60 && turnAngle < 150) return Icons.turn_right;
+    if (turnAngle >= 150) return Icons.autorenew;
+    if (turnAngle < -20 && turnAngle > -60) return Icons.turn_left;
+    if (turnAngle <= -60 && turnAngle > -150) return Icons.turn_left;
+    return Icons.arrow_upward;
+  }
+
+  void _showTurnNotificationPopupMethod(String instruction, String distance, IconData icon) {
+    _turnNotificationTimer?.cancel();
+
+    setState(() {
+      _showTurnNotificationPopup = true;
+      _currentTurnInstruction = instruction;
+      _currentTurnDistance = distance;
+      _currentTurnIcon = icon;
+    });
+
+    _turnNotificationTimer = Timer(Duration(milliseconds: turnNotificationDurationMs), () {
+      if (mounted) {
+        setState(() {
+          _showTurnNotificationPopup = false;
+        });
+      }
+    });
+  }
+
+  void _updateRemainingRoute(LatLng currentPosition) {
+    if (_remainingRoute.isEmpty || _destination == null) return;
+
+    int closestIndex = 0;
+    double minDistance = double.infinity;
+
+    for (int i = 0; i < _remainingRoute.length; i++) {
+      double distance = geolocator.Geolocator.distanceBetween(
+        currentPosition.latitude,
+        currentPosition.longitude,
+        _remainingRoute[i].latitude,
+        _remainingRoute[i].longitude,
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = i;
+      }
+    }
+
+    if (minDistance < 30) {
+      if (closestIndex + 2 < _remainingRoute.length) {
+        _remainingRoute = _remainingRoute.sublist(closestIndex + 2);
+        _currentRouteIndex++;
+        _turnNotifiedForCurrentSegment = false;
+      } else {
+        _remainingRoute = [];
+      }
+      setState(() {});
+    }
+  }
+
   void _updateNavigationInstructions() {
-    if (_fullRoute.isEmpty || _currentPosition == null) return;
+    if (_remainingRoute.isEmpty || _currentPosition == null) return;
 
     double remainingDistance = 0;
-    if (_fullRoute.isNotEmpty) {
-      for (int i = 0; i < _fullRoute.length - 1; i++) {
+    if (_remainingRoute.isNotEmpty) {
+      for (int i = 0; i < _remainingRoute.length - 1; i++) {
         remainingDistance += geolocator.Geolocator.distanceBetween(
-          _fullRoute[i].latitude,
-          _fullRoute[i].longitude,
-          _fullRoute[i + 1].latitude,
-          _fullRoute[i + 1].longitude,
+          _remainingRoute[i].latitude,
+          _remainingRoute[i].longitude,
+          _remainingRoute[i + 1].latitude,
+          _remainingRoute[i + 1].longitude,
         );
       }
     }
@@ -423,6 +523,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _destination!.longitude,
     );
 
+    // Check if user has reached the destination
     if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
       _handleArrival();
     }
@@ -432,22 +533,25 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     setState(() {
       _hasArrived = true;
       _arrivalNotified = true;
+      _remainingRoute = [];
+      _showTurnNotificationPopup = false;
     });
 
+    // Show arrival dialog
+    _showArrivalDialog();
+
+    // If currently tracking, finish the activity
     if (_isTracking) {
       _autoStopTracking();
-    } else {
-      _showArrivalDialog();
     }
   }
 
   void _autoStopTracking() async {
     _stopwatch.stop();
     _timer?.cancel();
+    _turnNotificationTimer?.cancel();
 
     await _activityService.finishActivity();
-
-    _showArrivalDialog();
 
     await Future.delayed(const Duration(milliseconds: 500));
 
@@ -455,21 +559,22 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _showActivitySummary();
     }
 
+    // Reset navigation state after summary
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
           _isTracking = false;
           _isNavigating = false;
           _destination = null;
-          _fullRoute = [];
-          _routeInstructions = [];
-          _trackedRoute = [];
+          _remainingRoute = [];
           _hasArrived = false;
           _arrivalNotified = false;
           _lastPositionForDistance = null;
           _lastTimeForSpeed = null;
-          _showRouteSheet = false;
-          _showLandmarksSheet = false;
+          _showTurnNotificationPopup = false;
+          _currentRouteIndex = 0;
+          _turnNotifiedForCurrentSegment = false;
+          _hasStartedMovingToDestination = false;
         });
       }
     });
@@ -484,17 +589,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     setState(() {
       _isTracking = true;
-      _trackedRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
       _currentSpeed = 0;
       _maxSpeed = 0;
       _averageSpeed = 0;
-      _formattedPace = "--:--";
       _hasArrived = false;
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
+      _currentRouteIndex = 0;
+      _turnNotifiedForCurrentSegment = false;
+      _hasStartedMovingToDestination = true; // User has started moving
     });
 
     _stopwatch.reset();
@@ -507,15 +613,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
           if (_currentDuration > 0 && _currentDistance > 0) {
             _averageSpeed = _currentDistance / _currentDuration;
-
-            if (_averageSpeed > 0) {
-              double paceMinPerKm = 1000 / (_averageSpeed * 60);
-              if (!paceMinPerKm.isInfinite && !paceMinPerKm.isNaN) {
-                int minutes = paceMinPerKm.floor();
-                int seconds = ((paceMinPerKm - minutes) * 60).floor();
-                _formattedPace = '$minutes:${seconds.toString().padLeft(2, '0')} /km';
-              }
-            }
           }
         });
       }
@@ -533,25 +630,43 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  // When destination is set but not tracking, only show Cancel button
+  void _cancelDestination() {
+    setState(() {
+      _destination = null;
+      _remainingRoute = [];
+      _routeSegments = [];
+      _routePlaces = [];
+      _isNavigating = false;
+      _hasArrived = false;
+      _arrivalNotified = false;
+      _showTurnNotificationPopup = false;
+      _hasStartedMovingToDestination = false;
+    });
+  }
+
+  // Only used when tracking without destination
   void _stopTracking() async {
     _stopwatch.stop();
     _timer?.cancel();
+    _turnNotificationTimer?.cancel();
 
     await _activityService.finishActivity();
 
     setState(() {
       _isTracking = false;
       _isNavigating = false;
-      _destination = null;
-      _fullRoute = [];
-      _routeInstructions = [];
-      _trackedRoute = [];
-      _hasArrived = false;
-      _arrivalNotified = false;
+      _currentDistance = 0;
+      _currentDuration = 0;
+      _currentSpeed = 0;
+      _maxSpeed = 0;
+      _averageSpeed = 0;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
-      _showRouteSheet = false;
-      _showLandmarksSheet = false;
+      _showTurnNotificationPopup = false;
+      _currentRouteIndex = 0;
+      _turnNotifiedForCurrentSegment = false;
+      _hasStartedMovingToDestination = false;
     });
 
     if (mounted) {
@@ -559,30 +674,27 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  // Only used when tracking without destination
   void _cancelTracking() {
     _stopwatch.stop();
     _timer?.cancel();
+    _turnNotificationTimer?.cancel();
     _activityService.cancelActivity();
 
     setState(() {
       _isTracking = false;
       _isNavigating = false;
-      _destination = null;
-      _fullRoute = [];
-      _routeInstructions = [];
-      _trackedRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
       _currentSpeed = 0;
       _maxSpeed = 0;
       _averageSpeed = 0;
-      _formattedPace = "--:--";
-      _hasArrived = false;
-      _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
-      _showRouteSheet = false;
-      _showLandmarksSheet = false;
+      _showTurnNotificationPopup = false;
+      _currentRouteIndex = 0;
+      _turnNotifiedForCurrentSegment = false;
+      _hasStartedMovingToDestination = false;
     });
   }
 
@@ -603,8 +715,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               _buildSummaryRow('Avg Speed', _formatSpeed(_averageSpeed, _selectedTravelMode)),
               const Divider(),
               _buildSummaryRow('Max Speed', _formatSpeed(_maxSpeed, _selectedTravelMode)),
-              const Divider(),
-              _buildSummaryRow('Avg Pace', _formattedPace),
             ],
           ),
           actions: [
@@ -653,11 +763,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     int secs = (seconds % 60).floor();
 
     if (hours > 0) {
-      return '$hours h ${minutes} min';
+      return '${hours}h ${minutes}min';
     } else if (minutes > 0) {
-      return '$minutes min';
+      return '${minutes}min';
     } else {
-      return '${secs} sec';
+      return '${secs}sec';
     }
   }
 
@@ -689,6 +799,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _isNavigating = true;
         _hasArrived = false;
         _arrivalNotified = false;
+        _currentRouteIndex = 0;
+        _turnNotifiedForCurrentSegment = false;
+        _hasStartedMovingToDestination = false;
       });
       _calculateRoute();
 
@@ -721,9 +834,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     final route = await OSRMService.getRoute(_currentPosition!, _destination!);
     final details = await OSRMService.getRouteDetails(_currentPosition!, _destination!);
 
+    // Generate mock place names along the route (for bottom sheet)
+    _generateMockRoutePlaces();
+
     setState(() {
       if (route.isNotEmpty) {
-        _fullRoute = route;
+        _remainingRoute = route;
         _totalDistance = details['distance'];
         _totalDuration = details['duration'];
         _formattedTotalDistance = _formatDistance(_totalDistance);
@@ -734,7 +850,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _nextInstruction = "Head ${_getDirectionFromBearing(_heading)}";
 
         _generateMockRouteSegments();
-        _generateMockNearbyLandmarks();
       }
     });
 
@@ -751,6 +866,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  void _generateMockRoutePlaces() {
+    _routePlaces = [
+      'Camias', 'Baliti', 'Pandacaqui', 'Telapayong', 'Arenas',
+      'San Roque', 'Bitas', 'Culubasa', 'Sucaban', 'Tabang',
+      'Anao', 'San Pablo', 'San Antonio', 'San Francisco', 'San Juanito',
+      'San Nicolas', 'San Pedro', 'San Agustin', 'San Luis', 'Dolores',
+      'San Isidro', 'San Carlos', 'San Mateo', 'Santa Lucia', 'Santo Cristo'
+    ];
+  }
+
   void _generateMockRouteSegments() {
     _routeSegments = [
       {'instruction': 'Head north', 'distance': '0.3 km', 'time': '2 min', 'icon': Icons.arrow_upward},
@@ -759,10 +884,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       {'instruction': 'Turn left', 'distance': '0.4 km', 'time': '2 min', 'icon': Icons.turn_left},
       {'instruction': 'Arrive at destination', 'distance': '0.1 km', 'time': '1 min', 'icon': Icons.flag},
     ];
-  }
-
-  void _generateMockNearbyLandmarks() {
-    _nearbyLandmarks = _mockLandmarks.take(8).toList();
   }
 
   void _centerOnCurrentLocation() {
@@ -850,11 +971,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _showRouteBottomSheet() {
-    setState(() {
-      _showRouteSheet = true;
-      _showLandmarksSheet = false;
-    });
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -881,207 +997,155 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),
-                    onPressed: () {
-                      setState(() {
-                        _showRouteSheet = false;
-                      });
-                      Navigator.pop(context);
-                    },
+                    onPressed: () => Navigator.pop(context),
                   ),
                 ],
               ),
             ),
             Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _routeSegments.length,
-                itemBuilder: (context, index) {
-                  final segment = _routeSegments[index];
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
+              child: DefaultTabController(
+                length: 2,
+                child: Column(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+                      ),
+                      child: const TabBar(
+                        tabs: [
+                          Tab(text: 'Directions'),
+                          Tab(text: 'Places'),
+                        ],
+                        labelColor: Colors.blue,
+                        unselectedLabelColor: Colors.grey,
+                        indicatorColor: Colors.blue,
+                      ),
                     ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: _travelModeColors[_selectedTravelMode]?.withValues(alpha: 0.1) ?? Colors.blue.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            segment['icon'],
-                            color: _travelModeColors[_selectedTravelMode] ?? Colors.blue,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                segment['instruction'],
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
+                    Expanded(
+                      child: TabBarView(
+                        children: [
+                          // Directions Tab
+                          ListView.builder(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: _routeSegments.length,
+                            itemBuilder: (context, index) {
+                              final segment = _routeSegments[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${segment['distance']} • ${segment['time']}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade600,
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: _travelModeColors[_selectedTravelMode]?.withValues(alpha: 0.1) ?? Colors.blue.withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        segment['icon'],
+                                        color: _travelModeColors[_selectedTravelMode] ?? Colors.blue,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            segment['instruction'],
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${segment['distance']} • ${segment['time']}',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
+                              );
+                            },
                           ),
-                        ),
-                        Icon(
-                          Icons.arrow_forward_ios,
-                          size: 14,
-                          color: Colors.grey.shade400,
-                        ),
-                      ],
+
+                          // Places Tab
+                          ListView.builder(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: _routePlaces.length,
+                            itemBuilder: (context, index) {
+                              final place = _routePlaces[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        color: index < 3 ? Colors.green : Colors.grey.shade400,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        place,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
+                                          color: index < 3 ? Colors.black : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                    if (index == 0)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green.withValues(alpha: 0.1),
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Text(
+                                          'Next',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.green,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
                     ),
-                  );
-                },
+                  ],
+                ),
               ),
             ),
           ],
         ),
       ),
-    ).whenComplete(() {
-      setState(() {
-        _showRouteSheet = false;
-      });
-    });
-  }
-
-  void _showLandmarksBottomSheet() {
-    setState(() {
-      _showLandmarksSheet = true;
-      _showRouteSheet = false;
-    });
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.7,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Along the Way',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () {
-                      setState(() {
-                        _showLandmarksSheet = false;
-                      });
-                      Navigator.pop(context);
-                    },
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _nearbyLandmarks.length,
-                itemBuilder: (context, index) {
-                  final landmark = _nearbyLandmarks[index];
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            landmark['icon'],
-                            color: Colors.blue,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                landmark['name'],
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                landmark['distance'],
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            landmark['type'],
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.blue,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    ).whenComplete(() {
-      setState(() {
-        _showLandmarksSheet = false;
-      });
-    });
+    );
   }
 
   void _showErrorDialog(String message) {
@@ -1297,26 +1361,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Route to destination
-              if (_fullRoute.isNotEmpty && !_hasArrived && _destination != null)
+              // Only show remaining route (disappears as you pass)
+              if (_remainingRoute.isNotEmpty && !_hasArrived && _destination != null)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: _fullRoute,
+                      points: _remainingRoute,
                       color: currentColor.withValues(alpha: 0.8),
                       strokeWidth: 5,
-                    ),
-                  ],
-                ),
-
-              // Tracked route
-              if (_trackedRoute.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _trackedRoute,
-                      color: currentColor.withValues(alpha: 0.4),
-                      strokeWidth: 4,
                     ),
                   ],
                 ),
@@ -1558,94 +1610,165 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // Clickable Buttons for Route and Landmarks
-          if (_isNavigating && !_hasArrived)
-            Positioned(
-              top: _isNavigating ? 200 : 16,
-              left: 16,
-              child: Row(
-                children: [
-                  _buildActionButton(
-                    icon: Icons.route,
-                    label: 'Route',
-                    color: currentColor,
-                    onPressed: _showRouteBottomSheet,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildActionButton(
-                    icon: Icons.place,
-                    label: 'Along the way',
-                    color: Colors.green,
-                    onPressed: _showLandmarksBottomSheet,
-                  ),
-                ],
-              ),
-            ),
-
-          // Live Tracking Stats Card
+          // SMALLER Live Tracking Stats Card (only shown when tracking)
           if (_isTracking)
             Positioned(
-              top: 16,
+              top: _isNavigating ? 180 : 16,
               left: 16,
               right: 16,
               child: Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(12),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 10,
+                      blurRadius: 8,
                       offset: const Offset(0, 2),
                     ),
                   ],
                 ),
-                child: Column(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _buildStatItem(
-                          'Distance',
-                          _formatDistance(_currentDistance),
-                          Icons.straighten,
-                          currentColor,
-                        ),
-                        _buildStatItem(
-                          'Duration',
-                          _formatDuration(_currentDuration),
-                          Icons.timer,
-                          currentColor,
-                        ),
-                        _buildStatItem(
-                          'Speed',
-                          _formatSpeed(_currentSpeed, _selectedTravelMode),
-                          Icons.speed,
-                          currentColor,
-                        ),
-                      ],
+                    // Distance
+                    _buildCompactStat(
+                      value: _formatDistance(_currentDistance),
+                      icon: Icons.straighten,
+                      color: currentColor,
                     ),
-                    const SizedBox(height: 12),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _buildStatItem(
-                          'Avg Pace',
-                          _formattedPace,
-                          Icons.timer_outlined,
-                          currentColor,
-                        ),
-                        _buildStatItem(
-                          'Max Speed',
-                          _formatSpeed(_maxSpeed, _selectedTravelMode),
-                          Icons.flash_on,
-                          currentColor,
-                        ),
-                      ],
+
+                    // Vertical divider
+                    Container(
+                      height: 30,
+                      width: 1,
+                      color: Colors.grey.shade300,
+                    ),
+
+                    // Duration
+                    _buildCompactStat(
+                      value: _formatDuration(_currentDuration),
+                      icon: Icons.timer,
+                      color: currentColor,
+                    ),
+
+                    // Vertical divider
+                    Container(
+                      height: 30,
+                      width: 1,
+                      color: Colors.grey.shade300,
+                    ),
+
+                    // Speed
+                    _buildCompactStat(
+                      value: _formatSpeed(_currentSpeed, _selectedTravelMode),
+                      icon: Icons.speed,
+                      color: currentColor,
+                    ),
+
+                    // Vertical divider
+                    Container(
+                      height: 30,
+                      width: 1,
+                      color: Colors.grey.shade300,
+                    ),
+
+                    // Max Speed
+                    _buildCompactStat(
+                      value: _formatSpeed(_maxSpeed, _selectedTravelMode),
+                      icon: Icons.flash_on,
+                      color: currentColor,
                     ),
                   ],
                 ),
+              ),
+            ),
+
+          // Turn Notification Popup
+          if (_showTurnNotificationPopup)
+            Positioned(
+              top: _isNavigating ? 250 : 80,
+              left: 20,
+              right: 20,
+              child: TweenAnimationBuilder(
+                duration: const Duration(milliseconds: 300),
+                tween: Tween<double>(begin: 0, end: 1),
+                curve: Curves.easeOutBack,
+                builder: (context, double value, child) {
+                  return Transform.scale(
+                    scale: value,
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: currentColor.withValues(alpha: 0.3),
+                            blurRadius: 12,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                        border: Border.all(
+                          color: currentColor,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: currentColor.withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _currentTurnIcon,
+                              color: currentColor,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _currentTurnInstruction,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  'in $_currentTurnDistance',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+          // Route Button - only shown when destination is set but not tracking
+          if (_isNavigating && !_isTracking && !_hasArrived)
+            Positioned(
+              top: 240,
+              left: 16,
+              child: _buildActionButton(
+                icon: Icons.route,
+                label: 'Route',
+                color: currentColor,
+                onPressed: _showRouteBottomSheet,
               ),
             ),
 
@@ -1674,80 +1797,109 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                     );
                   }, color: Colors.red),
                 ],
-                if (_isNavigating && !_isTracking) ...[
-                  const SizedBox(height: 8),
-                  _buildControlButton(Icons.close, () {
-                    setState(() {
-                      _destination = null;
-                      _fullRoute = [];
-                      _routeInstructions = [];
-                      _nearbyLandmarks = [];
-                      _routeSegments = [];
-                      _isNavigating = false;
-                      _hasArrived = false;
-                      _arrivalNotified = false;
-                    });
-                  }, color: Colors.red),
-                ],
               ],
             ),
           ),
 
-          // Start/Stop Buttons
+          // Bottom Buttons - Different based on state
           Positioned(
             bottom: 32,
             left: 0,
             right: 0,
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(30),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 10,
+                      blurRadius: 8,
                     ),
                   ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (!_isTracking)
-                      ElevatedButton.icon(
-                        onPressed: _currentPosition != null ? _startTracking : null,
-                        icon: const Icon(Icons.play_arrow),
-                        label: Text(_isNavigating ? 'Start' : 'Start'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: currentColor,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        ),
-                      ),
-                    if (_isTracking) ...[
-                      ElevatedButton.icon(
-                        onPressed: _stopTracking,
-                        icon: const Icon(Icons.stop),
-                        label: const Text('Finish'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      OutlinedButton.icon(
-                        onPressed: _cancelTracking,
-                        icon: const Icon(Icons.cancel),
-                        label: const Text('Cancel'),
+                    // Case 1: Destination set but not tracking - ONLY Cancel button
+                    if (_isNavigating && !_isTracking && !_hasArrived)
+                      OutlinedButton(
+                        onPressed: _cancelDestination,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.red,
                           side: const BorderSide(color: Colors.red),
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                          minimumSize: const Size(100, 36),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
                         ),
+                        child: const Text('Cancel'),
+                      ),
+
+                    // Case 2: Tracking without destination - Show Finish and Cancel
+                    if (_isTracking && !_isNavigating) ...[
+                      ElevatedButton(
+                        onPressed: _stopTracking,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(80, 36),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: const Text('Finish'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: _cancelTracking,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red,
+                          side: const BorderSide(color: Colors.red),
+                          minimumSize: const Size(80, 36),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: const Text('Cancel'),
                       ),
                     ],
+
+                    // Case 3: Tracking with destination - Only show Cancel button (arrival auto-finishes)
+                    if (_isTracking && _isNavigating)
+                      OutlinedButton(
+                        onPressed: _cancelTracking,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red,
+                          side: const BorderSide(color: Colors.red),
+                          minimumSize: const Size(100, 36),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: const Text('Cancel'),
+                      ),
+
+                    // Case 4: No destination and not tracking - Show Start button
+                    if (!_isTracking && !_isNavigating)
+                      ElevatedButton(
+                        onPressed: _currentPosition != null ? _startTracking : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: currentColor,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(100, 36),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: const Text('Start'),
+                      ),
                   ],
                 ),
               ),
@@ -1755,6 +1907,28 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           ),
         ],
       ),
+    );
+  }
+
+  // Helper widget for compact stats
+  Widget _buildCompactStat({
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 16),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1767,14 +1941,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     return GestureDetector(
       onTap: onPressed,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(30),
+          borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 8,
+              blurRadius: 6,
               offset: const Offset(0, 2),
             ),
           ],
@@ -1782,13 +1956,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: color, size: 18),
-            const SizedBox(width: 6),
+            Icon(icon, color: color, size: 16),
+            const SizedBox(width: 4),
             Text(
               label,
               style: TextStyle(
                 color: Colors.grey.shade800,
-                fontSize: 14,
+                fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -1798,57 +1972,23 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  IconData _getLandmarkIcon(String type) {
-    switch (type) {
-      case 'mall': return Icons.shopping_bag;
-      case 'shop': return Icons.shop;
-      case 'cafe': return Icons.local_cafe;
-      case 'restaurant': return Icons.restaurant;
-      case 'market': return Icons.store;
-      case 'landmark': return Icons.location_city;
-      case 'street': return Icons.add_road;
-      default: return Icons.place;
-    }
-  }
-
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            color: Colors.grey.shade600,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildControlButton(IconData icon, VoidCallback onPressed, {Color color = Colors.blue}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 8,
+            blurRadius: 6,
           ),
         ],
       ),
       child: IconButton(
-        icon: Icon(icon, color: color),
+        icon: Icon(icon, color: color, size: 20),
         onPressed: onPressed,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
       ),
     );
   }
