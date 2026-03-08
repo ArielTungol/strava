@@ -860,7 +860,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  // Updated arrival dialog with stats
   Future<void> _showArrivalDialog() async {
     return showDialog(
       context: context,
