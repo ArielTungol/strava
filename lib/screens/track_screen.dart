@@ -30,19 +30,28 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   LatLng? _currentPosition;
   LatLng? _previousPosition;
   double _heading = 0.0;
-  LatLng? _destination;
 
-  // Route data
-  List<LatLng> _remainingRoute = [];
-  List<Map<String, dynamic>> _routeInstructions = [];
-  List<Map<String, dynamic>> _routeSegments = [];
-  List<String> _routePlaces = [];
+  // Pinned destination (separate from tracking)
+  LatLng? _pinnedDestination;
+  bool _hasPinnedDestination = false;
+  bool _isSelectingPinnedDestination = false;
 
-  // Navigation state
+  // Route data for pinned destination
+  List<LatLng> _pinnedRoute = [];
+  List<Map<String, dynamic>> _pinnedRouteInstructions = [];
+  List<Map<String, dynamic>> _pinnedRouteSegments = [];
+  List<String> _pinnedRoutePlaces = [];
+
+  // Navigation state for pinned destination
+  bool _isNavigatingToPinned = false;
+
+  // Regular tracking state (without destination)
   bool _isTracking = false;
-  bool _isSelectingDestination = false;
-  bool _isNavigating = false;
+
+  // Travel mode
   String _selectedTravelMode = 'driving';
+
+  // Location permission
   bool _locationPermissionGranted = false;
   bool _isLoadingLocation = true;
   String _locationError = '';
@@ -54,12 +63,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   IconData _currentTurnIcon = Icons.arrow_forward;
   Timer? _turnNotificationTimer;
 
-  // Arrival detection
-  bool _hasArrived = false;
-  final double _arrivalThreshold = 15.0; // Reduced to 15 meters for more accurate arrival
+  // Arrival detection for pinned destination
+  bool _hasArrivedAtPinned = false;
+  final double _arrivalThreshold = 15.0;
   bool _arrivalNotified = false;
 
-  // Navigation info
+  // Navigation info for pinned destination
   String _nextInstruction = "";
   double _distanceToNextTurn = 0;
   String _formattedDistanceToTurn = "";
@@ -308,19 +317,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
               _animateMarkerToNewPosition(position);
 
-              // Check arrival BEFORE other navigation updates
-              if (_destination != null && !_hasArrived) {
-                _checkArrival();
+              // Check arrival at pinned destination
+              if (_pinnedDestination != null && !_hasArrivedAtPinned) {
+                _checkArrivalAtPinned();
 
                 // Only update navigation if we haven't arrived
-                if (!_hasArrived) {
-                  _updateNavigationInstructions();
-                  _updateRemainingRoute(position);
-                  _checkForTurn(position);
+                if (!_hasArrivedAtPinned) {
+                  _updatePinnedNavigationInstructions();
+                  _updatePinnedRoute(position);
+                  _checkForTurnAtPinned(position);
                 }
               }
 
-              if (_isTracking && !_hasArrived) { // Only track if not arrived
+              // Regular tracking (without destination)
+              if (_isTracking && !_hasArrivedAtPinned) {
                 if (_lastPositionForDistance != null) {
                   double segmentDistance = geolocator.Geolocator.distanceBetween(
                     _lastPositionForDistance!.latitude,
@@ -354,7 +364,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 );
               }
 
-              if (_isNavigating && !_isTracking && !_hasArrived) {
+              // Center map when navigating to pinned destination
+              if (_isNavigatingToPinned && !_isTracking && !_hasArrivedAtPinned) {
                 _mapController.move(position, 15);
               }
             });
@@ -377,13 +388,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  void _checkForTurn(LatLng currentPosition) {
-    if (_remainingRoute.length < 3 || _turnNotifiedForCurrentSegment) return;
+  void _checkForTurnAtPinned(LatLng currentPosition) {
+    if (_pinnedRoute.length < 3 || _turnNotifiedForCurrentSegment) return;
 
     // Get current direction and next direction
-    LatLng currentPoint = _remainingRoute[0];
-    LatLng nextPoint = _remainingRoute[1];
-    LatLng futurePoint = _remainingRoute[2];
+    LatLng currentPoint = _pinnedRoute[0];
+    LatLng nextPoint = _pinnedRoute[1];
+    LatLng futurePoint = _pinnedRoute[2];
 
     double currentBearing = _calculateBearing(currentPoint, nextPoint);
     double nextBearing = _calculateBearing(nextPoint, futurePoint);
@@ -451,18 +462,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
   }
 
-  void _updateRemainingRoute(LatLng currentPosition) {
-    if (_remainingRoute.isEmpty || _destination == null) return;
+  void _updatePinnedRoute(LatLng currentPosition) {
+    if (_pinnedRoute.isEmpty || _pinnedDestination == null) return;
 
     int closestIndex = 0;
     double minDistance = double.infinity;
 
-    for (int i = 0; i < _remainingRoute.length; i++) {
+    for (int i = 0; i < _pinnedRoute.length; i++) {
       double distance = geolocator.Geolocator.distanceBetween(
         currentPosition.latitude,
         currentPosition.longitude,
-        _remainingRoute[i].latitude,
-        _remainingRoute[i].longitude,
+        _pinnedRoute[i].latitude,
+        _pinnedRoute[i].longitude,
       );
 
       if (distance < minDistance) {
@@ -472,28 +483,28 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
 
     if (minDistance < 30) {
-      if (closestIndex + 2 < _remainingRoute.length) {
-        _remainingRoute = _remainingRoute.sublist(closestIndex + 2);
+      if (closestIndex + 2 < _pinnedRoute.length) {
+        _pinnedRoute = _pinnedRoute.sublist(closestIndex + 2);
         _currentRouteIndex++;
         _turnNotifiedForCurrentSegment = false;
       } else {
-        _remainingRoute = [];
+        _pinnedRoute = [];
       }
       setState(() {});
     }
   }
 
-  void _updateNavigationInstructions() {
-    if (_remainingRoute.isEmpty || _currentPosition == null) return;
+  void _updatePinnedNavigationInstructions() {
+    if (_pinnedRoute.isEmpty || _currentPosition == null) return;
 
     double remainingDistance = 0;
-    if (_remainingRoute.isNotEmpty) {
-      for (int i = 0; i < _remainingRoute.length - 1; i++) {
+    if (_pinnedRoute.isNotEmpty) {
+      for (int i = 0; i < _pinnedRoute.length - 1; i++) {
         remainingDistance += geolocator.Geolocator.distanceBetween(
-          _remainingRoute[i].latitude,
-          _remainingRoute[i].longitude,
-          _remainingRoute[i + 1].latitude,
-          _remainingRoute[i + 1].longitude,
+          _pinnedRoute[i].latitude,
+          _pinnedRoute[i].longitude,
+          _pinnedRoute[i + 1].latitude,
+          _pinnedRoute[i + 1].longitude,
         );
       }
     }
@@ -511,42 +522,42 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
   }
 
-  void _checkArrival() {
-    if (_destination == null || _currentPosition == null || _hasArrived) return;
+  void _checkArrivalAtPinned() {
+    if (_pinnedDestination == null || _currentPosition == null || _hasArrivedAtPinned) return;
 
     double distanceToDestination = geolocator.Geolocator.distanceBetween(
       _currentPosition!.latitude,
       _currentPosition!.longitude,
-      _destination!.latitude,
-      _destination!.longitude,
+      _pinnedDestination!.latitude,
+      _pinnedDestination!.longitude,
     );
 
     if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
-      print('Arrived at destination! Distance: $distanceToDestination meters');
-      _handleArrival();
+      print('Arrived at pinned destination! Distance: $distanceToDestination meters');
+      _handleArrivalAtPinned();
     }
   }
 
-  void _handleArrival() {
+  void _handleArrivalAtPinned() {
     // Add haptic feedback
     HapticFeedback.heavyImpact();
 
     setState(() {
-      _hasArrived = true;
+      _hasArrivedAtPinned = true;
       _arrivalNotified = true;
-      _remainingRoute = [];
+      _pinnedRoute = [];
       _showTurnNotificationPopup = false;
     });
 
     // Automatically finish tracking if it's active
     if (_isTracking) {
-      _autoStopTrackingOnArrival();
+      _autoStopTrackingOnArrivalAtPinned();
     } else {
-      _showArrivalDialog();
+      _showPinnedArrivalDialog();
     }
   }
 
-  void _autoStopTrackingOnArrival() async {
+  void _autoStopTrackingOnArrivalAtPinned() async {
     // Stop the stopwatch and timers
     _stopwatch.stop();
     _timer?.cancel();
@@ -556,16 +567,17 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     await _activityService.finishActivity();
 
     // Show arrival dialog with stats
-    await _showArrivalDialog();
+    await _showPinnedArrivalDialog();
 
     // Reset navigation state after dialog
     if (mounted) {
       setState(() {
         _isTracking = false;
-        _isNavigating = false;
-        _destination = null;
-        _remainingRoute = [];
-        _hasArrived = false;
+        _isNavigatingToPinned = false;
+        _hasPinnedDestination = false;
+        _pinnedDestination = null;
+        _pinnedRoute = [];
+        _hasArrivedAtPinned = false;
         _arrivalNotified = false;
         _lastPositionForDistance = null;
         _lastTimeForSpeed = null;
@@ -576,11 +588,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
+  // Regular tracking without destination
   void _startTracking() {
     _activityService.startNewActivity(
       '${_selectedTravelMode.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
       _getActivityTypeFromString(_selectedTravelMode),
-      destination: _destination,
+      destination: null, // No destination for regular tracking
     );
 
     setState(() {
@@ -590,12 +603,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _currentSpeed = 0;
       _maxSpeed = 0;
       _averageSpeed = 0;
-      _hasArrived = false;
-      _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
-      _currentRouteIndex = 0;
-      _turnNotifiedForCurrentSegment = false;
     });
 
     _stopwatch.reset();
@@ -634,10 +643,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     setState(() {
       _isTracking = false;
-      _isNavigating = false;
-      _destination = null;
-      _remainingRoute = [];
-      _hasArrived = false;
+      _isNavigatingToPinned = false;
+      _hasPinnedDestination = false;
+      _pinnedDestination = null;
+      _pinnedRoute = [];
+      _hasArrivedAtPinned = false;
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
@@ -659,15 +669,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
     setState(() {
       _isTracking = false;
-      _isNavigating = false;
-      _destination = null;
-      _remainingRoute = [];
+      _isNavigatingToPinned = false;
+      _hasPinnedDestination = false;
+      _pinnedDestination = null;
+      _pinnedRoute = [];
       _currentDistance = 0;
       _currentDuration = 0;
       _currentSpeed = 0;
       _maxSpeed = 0;
       _averageSpeed = 0;
-      _hasArrived = false;
+      _hasArrivedAtPinned = false;
       _arrivalNotified = false;
       _lastPositionForDistance = null;
       _lastTimeForSpeed = null;
@@ -771,29 +782,30 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
-    if (_isSelectingDestination && !_isTracking) {
+    if (_isSelectingPinnedDestination && !_isTracking) {
       setState(() {
-        _destination = point;
-        _isSelectingDestination = false;
-        _isNavigating = true;
-        _hasArrived = false;
+        _pinnedDestination = point;
+        _hasPinnedDestination = true;
+        _isSelectingPinnedDestination = false;
+        _isNavigatingToPinned = true;
+        _hasArrivedAtPinned = false;
         _arrivalNotified = false;
         _currentRouteIndex = 0;
         _turnNotifiedForCurrentSegment = false;
       });
-      _calculateRoute();
+      _calculateRouteToPinned();
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Destination set! ${_calculateDistanceToDestination(point)} away'),
+          content: Text('Pinned destination set! ${_calculateDistanceToPinned(point)} away'),
           duration: const Duration(seconds: 2),
-          backgroundColor: Colors.blue,
+          backgroundColor: Colors.purple, // Different color for pinned destination
         ),
       );
     }
   }
 
-  String _calculateDistanceToDestination(LatLng destination) {
+  String _calculateDistanceToPinned(LatLng destination) {
     if (_currentPosition == null) return 'Unknown';
 
     double distance = geolocator.Geolocator.distanceBetween(
@@ -806,18 +818,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     return _formatDistance(distance);
   }
 
-  Future<void> _calculateRoute() async {
-    if (_currentPosition == null || _destination == null) return;
+  Future<void> _calculateRouteToPinned() async {
+    if (_currentPosition == null || _pinnedDestination == null) return;
 
-    final route = await OSRMService.getRoute(_currentPosition!, _destination!);
-    final details = await OSRMService.getRouteDetails(_currentPosition!, _destination!);
+    final route = await OSRMService.getRoute(_currentPosition!, _pinnedDestination!);
+    final details = await OSRMService.getRouteDetails(_currentPosition!, _pinnedDestination!);
 
     // Generate mock place names along the route (for bottom sheet)
-    _generateMockRoutePlaces();
+    _generateMockPinnedRoutePlaces();
 
     setState(() {
       if (route.isNotEmpty) {
-        _remainingRoute = route;
+        _pinnedRoute = route;
         _totalDistance = details['distance'];
         _totalDuration = details['duration'];
         _formattedTotalDistance = _formatDistance(_totalDistance);
@@ -827,7 +839,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _formattedEta = _formatTime(eta);
         _nextInstruction = "Head ${_getDirectionFromBearing(_heading)}";
 
-        _generateMockRouteSegments();
+        _generateMockPinnedRouteSegments();
       }
     });
 
@@ -844,8 +856,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  void _generateMockRoutePlaces() {
-    _routePlaces = [
+  void _generateMockPinnedRoutePlaces() {
+    _pinnedRoutePlaces = [
       'Camias', 'Baliti', 'Pandacaqui', 'Telapayong', 'Arenas',
       'San Roque', 'Bitas', 'Culubasa', 'Sucaban', 'Tabang',
       'Anao', 'San Pablo', 'San Antonio', 'San Francisco', 'San Juanito',
@@ -854,13 +866,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     ];
   }
 
-  void _generateMockRouteSegments() {
-    _routeSegments = [
+  void _generateMockPinnedRouteSegments() {
+    _pinnedRouteSegments = [
       {'instruction': 'Head north', 'distance': '0.3 km', 'time': '2 min', 'icon': Icons.arrow_upward},
       {'instruction': 'Turn right', 'distance': '0.5 km', 'time': '3 min', 'icon': Icons.turn_right},
       {'instruction': 'Continue straight', 'distance': '1.2 km', 'time': '5 min', 'icon': Icons.arrow_forward},
       {'instruction': 'Turn left', 'distance': '0.4 km', 'time': '2 min', 'icon': Icons.turn_left},
-      {'instruction': 'Arrive at destination', 'distance': '0.1 km', 'time': '1 min', 'icon': Icons.flag},
+      {'instruction': 'Arrive at pinned destination', 'distance': '0.1 km', 'time': '1 min', 'icon': Icons.flag},
     ];
   }
 
@@ -870,7 +882,23 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  Future<void> _showArrivalDialog() async {
+  void _clearPinnedDestination() {
+    setState(() {
+      _pinnedDestination = null;
+      _hasPinnedDestination = false;
+      _pinnedRoute = [];
+      _pinnedRouteSegments = [];
+      _pinnedRoutePlaces = [];
+      _isNavigatingToPinned = false;
+      _hasArrivedAtPinned = false;
+      _arrivalNotified = false;
+      _showTurnNotificationPopup = false;
+      _currentRouteIndex = 0;
+      _turnNotifiedForCurrentSegment = false;
+    });
+  }
+
+  Future<void> _showPinnedArrivalDialog() async {
     return showDialog(
       context: context,
       barrierDismissible: false,
@@ -884,20 +912,20 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.green.shade100,
+                  color: Colors.purple.shade100,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
-                  Icons.emoji_emotions,
-                  color: Colors.green,
+                  Icons.location_on,
+                  color: Colors.purple,
                   size: 50,
                 ),
               ),
               const SizedBox(height: 16),
               const Text(
-                'You Have Arrived! 🎉',
+                'Arrived at Pinned Location! 🎯',
                 style: TextStyle(
-                  fontSize: 24,
+                  fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -907,7 +935,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'You have successfully reached your destination.',
+                'You have successfully reached your pinned destination.',
                 style: TextStyle(fontSize: 16),
                 textAlign: TextAlign.center,
               ),
@@ -915,18 +943,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
+                  color: Colors.purple.shade50,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.location_on, color: Colors.red),
+                    const Icon(Icons.location_on, color: Colors.purple),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        _destination != null
-                            ? 'Lat: ${_destination!.latitude.toStringAsFixed(4)}, Lng: ${_destination!.longitude.toStringAsFixed(4)}'
+                        _pinnedDestination != null
+                            ? 'Lat: ${_pinnedDestination!.latitude.toStringAsFixed(4)}, Lng: ${_pinnedDestination!.longitude.toStringAsFixed(4)}'
                             : 'Destination reached',
                         style: const TextStyle(fontWeight: FontWeight.w500),
                       ),
@@ -1035,7 +1063,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  void _showRouteBottomSheet() {
+  void _showPinnedRouteBottomSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1056,9 +1084,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Route Details',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  Row(
+                    children: [
+                      Icon(Icons.location_on, color: Colors.purple, size: 20),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Pinned Route Details',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ],
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),
@@ -1081,9 +1115,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           Tab(text: 'Directions'),
                           Tab(text: 'Places'),
                         ],
-                        labelColor: Colors.blue,
+                        labelColor: Colors.purple,
                         unselectedLabelColor: Colors.grey,
-                        indicatorColor: Colors.blue,
+                        indicatorColor: Colors.purple,
                       ),
                     ),
                     Expanded(
@@ -1092,9 +1126,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           // Directions Tab
                           ListView.builder(
                             padding: const EdgeInsets.all(16),
-                            itemCount: _routeSegments.length,
+                            itemCount: _pinnedRouteSegments.length,
                             itemBuilder: (context, index) {
-                              final segment = _routeSegments[index];
+                              final segment = _pinnedRouteSegments[index];
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(12),
@@ -1107,12 +1141,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                                     Container(
                                       padding: const EdgeInsets.all(8),
                                       decoration: BoxDecoration(
-                                        color: _travelModeColors[_selectedTravelMode]?.withValues(alpha: 0.1) ?? Colors.blue.withValues(alpha: 0.1),
+                                        color: Colors.purple.withValues(alpha: 0.1),
                                         borderRadius: BorderRadius.circular(8),
                                       ),
                                       child: Icon(
                                         segment['icon'],
-                                        color: _travelModeColors[_selectedTravelMode] ?? Colors.blue,
+                                        color: Colors.purple,
                                         size: 20,
                                       ),
                                     ),
@@ -1148,9 +1182,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           // Places Tab
                           ListView.builder(
                             padding: const EdgeInsets.all(16),
-                            itemCount: _routePlaces.length,
+                            itemCount: _pinnedRoutePlaces.length,
                             itemBuilder: (context, index) {
-                              final place = _routePlaces[index];
+                              final place = _pinnedRoutePlaces[index];
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 8),
                                 padding: const EdgeInsets.all(12),
@@ -1164,7 +1198,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                                       width: 8,
                                       height: 8,
                                       decoration: BoxDecoration(
-                                        color: index < 3 ? Colors.green : Colors.grey.shade400,
+                                        color: index < 3 ? Colors.purple : Colors.grey.shade400,
                                         shape: BoxShape.circle,
                                       ),
                                     ),
@@ -1183,14 +1217,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                         decoration: BoxDecoration(
-                                          color: Colors.green.withValues(alpha: 0.1),
+                                          color: Colors.purple.withValues(alpha: 0.1),
                                           borderRadius: BorderRadius.circular(12),
                                         ),
                                         child: Text(
                                           'Next',
                                           style: TextStyle(
                                             fontSize: 10,
-                                            color: Colors.green,
+                                            color: Colors.purple,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
@@ -1390,7 +1424,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         backgroundColor: currentColor.withValues(alpha: 0.9),
         foregroundColor: Colors.white,
         actions: [
-          if (!_isTracking && !_isNavigating)
+          if (!_isTracking && !_isNavigatingToPinned)
             PopupMenuButton<String>(
               icon: const Icon(Icons.directions),
               onSelected: (value) {
@@ -1426,25 +1460,25 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Only show remaining route (disappears as you pass)
-              if (_remainingRoute.isNotEmpty && !_hasArrived && _destination != null)
+              // Only show pinned route (disappears as you pass)
+              if (_pinnedRoute.isNotEmpty && !_hasArrivedAtPinned && _pinnedDestination != null)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: _remainingRoute,
-                      color: currentColor.withValues(alpha: 0.8),
+                      points: _pinnedRoute,
+                      color: Colors.purple.withValues(alpha: 0.8), // Purple for pinned route
                       strokeWidth: 5,
                     ),
                   ],
                 ),
 
-              if (_destination != null && _isNavigating)
+              if (_pinnedDestination != null && _isNavigatingToPinned)
                 CircleLayer(
                   circles: [
                     CircleMarker(
-                      point: _destination!,
-                      color: Colors.green.withValues(alpha: 0.2),
-                      borderColor: Colors.green,
+                      point: _pinnedDestination!,
+                      color: Colors.purple.withValues(alpha: 0.2), // Purple for pinned destination
+                      borderColor: Colors.purple,
                       borderStrokeWidth: 2,
                       radius: _arrivalThreshold,
                     ),
@@ -1473,7 +1507,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                               shape: BoxShape.circle,
                             ),
                           ),
-                          // Inner blue dot
+                          // Inner dot
                           Container(
                             width: 16,
                             height: 16,
@@ -1490,7 +1524,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                               ],
                             ),
                           ),
-                          // Direction indicator (like Google Maps)
+                          // Direction indicator
                           if (_currentSpeed > 0.5)
                             Positioned(
                               top: 0,
@@ -1510,26 +1544,26 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       ),
                     ),
 
-                  // Google Maps Style Destination Marker
-                  if (_destination != null)
+                  // Pinned Destination Marker (Purple)
+                  if (_pinnedDestination != null)
                     Marker(
-                      point: _destination!,
+                      point: _pinnedDestination!,
                       width: 40,
                       height: 40,
                       child: Stack(
                         clipBehavior: Clip.none,
                         children: [
-                          if (!_hasArrived)
+                          if (!_hasArrivedAtPinned)
                             const Icon(
                               Icons.location_pin,
-                              color: Colors.red,
+                              color: Colors.purple,
                               size: 40,
                             ),
-                          if (_hasArrived)
+                          if (_hasArrivedAtPinned)
                             Container(
                               padding: const EdgeInsets.all(8),
                               decoration: const BoxDecoration(
-                                color: Colors.green,
+                                color: Colors.purple,
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
@@ -1546,8 +1580,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ],
           ),
 
-          // Navigation Header (Google Maps Style)
-          if (_isNavigating && _destination != null && !_hasArrived)
+          // Navigation Header for Pinned Destination
+          if (_isNavigatingToPinned && _pinnedDestination != null && !_hasArrivedAtPinned)
             Positioned(
               top: 0,
               left: 0,
@@ -1570,6 +1604,28 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.purple.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.location_on, color: Colors.purple, size: 20),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Pinned Destination',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.purple,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Expanded(
@@ -1651,7 +1707,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  'Then • ${_routeSegments.isNotEmpty ? _routeSegments[0]['instruction'] : ''}',
+                                  'Then • ${_pinnedRouteSegments.isNotEmpty ? _pinnedRouteSegments[0]['instruction'] : ''}',
                                   style: TextStyle(
                                     fontSize: 13,
                                     color: Colors.grey.shade600,
@@ -1675,10 +1731,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // SMALLER Live Tracking Stats Card (compact design)
+          // Live Tracking Stats Card
           if (_isTracking)
             Positioned(
-              top: _isNavigating ? 180 : 16,
+              top: _isNavigatingToPinned ? 200 : 16,
               left: 16,
               right: 16,
               child: Container(
@@ -1697,49 +1753,36 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    // Distance
                     _buildCompactStat(
                       value: _formatDistance(_currentDistance),
                       icon: Icons.straighten,
                       color: currentColor,
                     ),
-
-                    // Vertical divider
                     Container(
                       height: 30,
                       width: 1,
                       color: Colors.grey.shade300,
                     ),
-
-                    // Duration
                     _buildCompactStat(
                       value: _formatDuration(_currentDuration),
                       icon: Icons.timer,
                       color: currentColor,
                     ),
-
-                    // Vertical divider
                     Container(
                       height: 30,
                       width: 1,
                       color: Colors.grey.shade300,
                     ),
-
-                    // Speed
                     _buildCompactStat(
                       value: _formatSpeed(_currentSpeed, _selectedTravelMode),
                       icon: Icons.speed,
                       color: currentColor,
                     ),
-
-                    // Vertical divider
                     Container(
                       height: 30,
                       width: 1,
                       color: Colors.grey.shade300,
                     ),
-
-                    // Max Speed
                     _buildCompactStat(
                       value: _formatSpeed(_maxSpeed, _selectedTravelMode),
                       icon: Icons.flash_on,
@@ -1753,7 +1796,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           // Turn Notification Popup
           if (_showTurnNotificationPopup)
             Positioned(
-              top: _isNavigating ? 250 : 80,
+              top: _isNavigatingToPinned ? 270 : (_isTracking ? 100 : 80),
               left: 20,
               right: 20,
               child: TweenAnimationBuilder(
@@ -1770,13 +1813,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: currentColor.withValues(alpha: 0.3),
+                            color: (_isNavigatingToPinned ? Colors.purple : currentColor).withValues(alpha: 0.3),
                             blurRadius: 12,
                             spreadRadius: 1,
                           ),
                         ],
                         border: Border.all(
-                          color: currentColor,
+                          color: _isNavigatingToPinned ? Colors.purple : currentColor,
                           width: 1.5,
                         ),
                       ),
@@ -1785,12 +1828,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: currentColor.withValues(alpha: 0.1),
+                              color: (_isNavigatingToPinned ? Colors.purple : currentColor).withValues(alpha: 0.1),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
                               _currentTurnIcon,
-                              color: currentColor,
+                              color: _isNavigatingToPinned ? Colors.purple : currentColor,
                               size: 20,
                             ),
                           ),
@@ -1824,16 +1867,29 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
               ),
             ),
 
-          // Route Button
-          if (_isNavigating && !_hasArrived)
+          // Route Button for Pinned Destination
+          if (_isNavigatingToPinned && !_hasArrivedAtPinned)
             Positioned(
-              top: _isTracking ? 240 : 200,
+              top: _isTracking ? 260 : 220,
               left: 16,
               child: _buildActionButton(
                 icon: Icons.route,
-                label: 'Route',
-                color: currentColor,
-                onPressed: _showRouteBottomSheet,
+                label: 'Pinned Route',
+                color: Colors.purple,
+                onPressed: _showPinnedRouteBottomSheet,
+              ),
+            ),
+
+          // Clear Pinned Destination Button
+          if (_pinnedDestination != null && !_hasArrivedAtPinned)
+            Positioned(
+              top: _isNavigatingToPinned ? 220 : 80,
+              right: 16,
+              child: _buildActionButton(
+                icon: Icons.clear,
+                label: 'Clear Pin',
+                color: Colors.red,
+                onPressed: _clearPinnedDestination,
               ),
             ),
 
@@ -1848,40 +1904,28 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 _buildControlButton(Icons.remove, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1)),
                 const SizedBox(height: 8),
                 _buildControlButton(Icons.my_location, _centerOnCurrentLocation),
-                if (!_isTracking && !_isNavigating) ...[
+
+                // Pin Destination Button (separate from start)
+                if (!_isTracking && !_isNavigatingToPinned) ...[
                   const SizedBox(height: 8),
-                  _buildControlButton(Icons.place, () {
+                  _buildControlButton(Icons.push_pin, () {
                     setState(() {
-                      _isSelectingDestination = true;
+                      _isSelectingPinnedDestination = true;
                     });
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Tap on the map to set destination'),
+                        content: Text('Tap on the map to set a pinned destination'),
                         duration: Duration(seconds: 3),
+                        backgroundColor: Colors.purple,
                       ),
                     );
-                  }, color: Colors.red),
-                ],
-                if (_isNavigating && !_isTracking) ...[
-                  const SizedBox(height: 8),
-                  _buildControlButton(Icons.close, () {
-                    setState(() {
-                      _destination = null;
-                      _remainingRoute = [];
-                      _routeSegments = [];
-                      _routePlaces = [];
-                      _isNavigating = false;
-                      _hasArrived = false;
-                      _arrivalNotified = false;
-                      _showTurnNotificationPopup = false;
-                    });
-                  }, color: Colors.red),
+                  }, color: Colors.purple),
                 ],
               ],
             ),
           ),
 
-          // Start/Stop Buttons
+          // Start/Stop Buttons (separate from pin functionality)
           Positioned(
             bottom: 32,
             left: 0,
