@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
+import 'package:flutter/services.dart';
 
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
@@ -53,9 +54,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   IconData _currentTurnIcon = Icons.arrow_forward;
   Timer? _turnNotificationTimer;
 
-  // Arrival detection - CHANGED TO 5 METERS
+  // Arrival detection
   bool _hasArrived = false;
-  final double _arrivalThreshold = 5.0; // Changed to 5 meters
+  final double _arrivalThreshold = 15.0; // Reduced to 15 meters for more accurate arrival
   bool _arrivalNotified = false;
 
   // Navigation info
@@ -113,21 +114,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    print('🚀 TrackScreen initState');
     _initializeMarkerAnimation();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeLocation();
     });
-  }
-
-  @override
-  void dispose() {
-    print('🗑️ TrackScreen dispose');
-    _markerAnimationController?.dispose();
-    _timer?.cancel();
-    _turnNotificationTimer?.cancel();
-    _locationService.stopTracking();
-    super.dispose();
   }
 
   void _initializeMarkerAnimation() {
@@ -198,7 +188,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   Future<void> _initializeLocation() async {
-    print('📍 _initializeLocation started');
     setState(() {
       _isLoadingLocation = true;
       _locationError = '';
@@ -207,7 +196,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        print('❌ Location services disabled');
         setState(() {
           _isLoadingLocation = false;
           _locationError = 'Location services are disabled';
@@ -217,7 +205,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       }
 
       geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-      print('📍 Location permission: $permission');
 
       if (permission == geolocator.LocationPermission.denied) {
         permission = await geolocator.Geolocator.requestPermission();
@@ -246,7 +233,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
       while (position == null && attempts < maxAttempts) {
         try {
-          print('📍 Getting position attempt ${attempts + 1}');
           position = await geolocator.Geolocator.getCurrentPosition(
             locationSettings: const geolocator.LocationSettings(
               accuracy: geolocator.LocationAccuracy.best,
@@ -254,7 +240,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             ),
           );
         } catch (e) {
-          print('❌ Error getting position: $e');
           attempts++;
           if (attempts < maxAttempts) {
             await Future.delayed(const Duration(seconds: 1));
@@ -264,7 +249,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
       if (position != null) {
         final initialPosition = LatLng(position.latitude, position.longitude);
-        print('✅ Got position: $initialPosition');
         setState(() {
           _currentPosition = initialPosition;
           _stablePosition = initialPosition;
@@ -280,7 +264,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
         _startLocationUpdates();
       } else {
-        print('❌ Could not get location');
         setState(() {
           _isLoadingLocation = false;
           _locationError = 'Could not get location. Please try again.';
@@ -289,7 +272,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       }
 
     } catch (e) {
-      print('❌ Error in _initializeLocation: $e');
       setState(() {
         _isLoadingLocation = false;
         _locationError = 'Error: $e';
@@ -299,25 +281,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _startLocationUpdates() {
-    print('🔄 Starting location updates');
     try {
       _locationService.startTracking(
         onPositionChanged: (position) {
           if (!mounted) return;
-
-          // Debug: Print every position update
-          print('📍 Position update: ${position.latitude}, ${position.longitude}');
-
-          // Check if we have a destination
-          if (_destination != null) {
-            print('🎯 Destination is set: $_destination');
-          }
-
-          // ALWAYS check for arrival on EVERY position update
-          if (_destination != null && !_hasArrived && mounted) {
-            print('🔍 Checking arrival...');
-            _checkArrival();
-          }
 
           double distanceMoved = 0;
           if (_stablePosition != null) {
@@ -341,13 +308,19 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
               _animateMarkerToNewPosition(position);
 
+              // Check arrival BEFORE other navigation updates
               if (_destination != null && !_hasArrived) {
-                _updateNavigationInstructions();
-                _updateRemainingRoute(position);
-                _checkForTurn(position);
+                _checkArrival();
+
+                // Only update navigation if we haven't arrived
+                if (!_hasArrived) {
+                  _updateNavigationInstructions();
+                  _updateRemainingRoute(position);
+                  _checkForTurn(position);
+                }
               }
 
-              if (_isTracking) {
+              if (_isTracking && !_hasArrived) { // Only track if not arrived
                 if (_lastPositionForDistance != null) {
                   double segmentDistance = geolocator.Geolocator.distanceBetween(
                     _lastPositionForDistance!.latitude,
@@ -400,57 +373,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         },
       );
     } catch (e) {
-      print('❌ Error in _startLocationUpdates: $e');
       _showErrorDialog('Error starting location tracking: $e');
-    }
-  }
-
-  void _checkArrival() {
-    if (_destination == null) {
-      print('❌ _checkArrival: Destination is null');
-      return;
-    }
-
-    if (_currentPosition == null) {
-      print('❌ _checkArrival: Current position is null');
-      return;
-    }
-
-    if (_hasArrived) {
-      print('❌ _checkArrival: Already arrived');
-      return;
-    }
-
-    double distanceToDestination = geolocator.Geolocator.distanceBetween(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      _destination!.latitude,
-      _destination!.longitude,
-    );
-
-    print('📍 Distance to destination: ${distanceToDestination.toStringAsFixed(2)} meters');
-    print('📍 Threshold: $_arrivalThreshold meters');
-    print('📍 Has arrived: $_hasArrived');
-    print('📍 Arrival notified: $_arrivalNotified');
-
-    if (distanceToDestination <= _arrivalThreshold) {
-      print('🎯 WITHIN THRESHOLD!');
-
-      if (!_arrivalNotified) {
-        print('🎯 ARRIVAL DETECTED! Triggering arrival handler...');
-        print('📍 Distance: ${distanceToDestination.toStringAsFixed(2)}m <= $_arrivalThreshold');
-
-        // Force UI update on main thread
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _handleArrival();
-          }
-        });
-      } else {
-        print('⚠️ Already notified arrival');
-      }
-    } else {
-      print('❌ Not within threshold yet');
     }
   }
 
@@ -588,8 +511,25 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
   }
 
+  void _checkArrival() {
+    if (_destination == null || _currentPosition == null || _hasArrived) return;
+
+    double distanceToDestination = geolocator.Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      _destination!.latitude,
+      _destination!.longitude,
+    );
+
+    if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
+      print('Arrived at destination! Distance: $distanceToDestination meters');
+      _handleArrival();
+    }
+  }
+
   void _handleArrival() {
-    print('🛑 Handling arrival...');
+    // Add haptic feedback
+    HapticFeedback.heavyImpact();
 
     setState(() {
       _hasArrived = true;
@@ -598,18 +538,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _showTurnNotificationPopup = false;
     });
 
-    // If tracking is active, save the activity
+    // Automatically finish tracking if it's active
     if (_isTracking) {
-      _autoStopTracking();
+      _autoStopTrackingOnArrival();
     } else {
-      // Just show arrival dialog if not tracking
       _showArrivalDialog();
     }
   }
 
-  void _autoStopTracking() async {
-    print('🛑 Auto-stopping tracking on arrival...');
-
+  void _autoStopTrackingOnArrival() async {
+    // Stop the stopwatch and timers
     _stopwatch.stop();
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
@@ -620,11 +558,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     // Show arrival dialog with stats
     await _showArrivalDialog();
 
-    // Reset after dialog
+    // Reset navigation state after dialog
     if (mounted) {
       setState(() {
         _isTracking = false;
         _isNavigating = false;
+        _destination = null;
         _remainingRoute = [];
         _hasArrived = false;
         _arrivalNotified = false;
@@ -634,22 +573,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _currentRouteIndex = 0;
         _turnNotifiedForCurrentSegment = false;
       });
-
-      // Don't clear destination immediately so it shows in the dialog
-      // Clear it after a short delay
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) {
-          setState(() {
-            _destination = null;
-          });
-          print('📍 Destination cleared');
-        }
-      });
     }
   }
 
   void _startTracking() {
-    print('▶️ Starting tracking');
     _activityService.startNewActivity(
       '${_selectedTravelMode.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
       _getActivityTypeFromString(_selectedTravelMode),
@@ -699,7 +626,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _stopTracking() async {
-    print('⏹️ Stopping tracking');
     _stopwatch.stop();
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
@@ -726,7 +652,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _cancelTracking() {
-    print('❌ Cancelling tracking');
     _stopwatch.stop();
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
@@ -847,7 +772,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
     if (_isSelectingDestination && !_isTracking) {
-      print('📍 Destination selected: $point');
       setState(() {
         _destination = point;
         _isSelectingDestination = false;
@@ -947,7 +871,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   Future<void> _showArrivalDialog() async {
-    print('📱 Showing arrival dialog');
     return showDialog(
       context: context,
       barrierDismissible: false,
@@ -984,8 +907,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'You have reached your destination.',
+                'You have successfully reached your destination.',
                 style: TextStyle(fontSize: 16),
+                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
               Container(
@@ -1085,6 +1009,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       ),
                     ],
                   ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Activity has been saved to your history!',
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
               ],
             ],
