@@ -540,16 +540,13 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
 
+    // Save the activity to Hive database
     await _activityService.finishActivity();
 
-    _showArrivalDialog();
+    // Show arrival dialog with stats
+    await _showArrivalDialog();
 
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (mounted) {
-      _showActivitySummary();
-    }
-
+    // Reset after dialog
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
@@ -863,8 +860,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  void _showArrivalDialog() {
-    showDialog(
+  // Updated arrival dialog with stats
+  Future<void> _showArrivalDialog() async {
+    return showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
@@ -926,6 +924,83 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
               ),
+              const SizedBox(height: 16),
+              if (_isTracking) ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Distance:',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          Text(
+                            _formatDistance(_currentDistance),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Duration:',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          Text(
+                            _formatDuration(_currentDuration),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Avg Speed:',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          Text(
+                            _formatSpeed(_averageSpeed, _selectedTravelMode),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Max Speed:',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          Text(
+                            _formatSpeed(_maxSpeed, _selectedTravelMode),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
           actions: [
