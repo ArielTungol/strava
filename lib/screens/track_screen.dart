@@ -55,7 +55,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Arrival detection
   bool _hasArrived = false;
-  final double _arrivalThreshold = 1.0; // Changed to 1 meter for immediate detection
+  // Updated to 5 meters as requested for better GPS reliability
+  final double _arrivalThreshold = 5.0;
   bool _arrivalNotified = false;
 
   // Navigation info
@@ -131,7 +132,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   void _initializeMarkerAnimation() {
     _markerAnimationController = AnimationController(
       vsync: this,
-      duration: Duration(milliseconds: markerAnimationDurationMs),
+      duration: const Duration(milliseconds: markerAnimationDurationMs),
     );
   }
 
@@ -276,7 +277,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           _isLoadingLocation = false;
           _locationError = 'Could not get location. Please try again.';
         });
-        _showErrorDialog('Could not get your location. Please make sure you are outside or have a clear GPS signal.');
+        _showErrorDialog('Could not get your location.');
       }
 
     } catch (e) {
@@ -294,9 +295,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         onPositionChanged: (position) {
           if (!mounted) return;
 
-          // ALWAYS check for arrival on EVERY position update, regardless of movement
+          // Constant check for arrival
           if (_destination != null && !_hasArrived && mounted) {
-            _checkArrival(); // This will trigger arrival if within threshold
+            _checkArrival();
           }
 
           double distanceMoved = 0;
@@ -321,7 +322,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
               _animateMarkerToNewPosition(position);
 
-              // Only update navigation if not arrived
               if (_destination != null && !_hasArrived) {
                 _updateNavigationInstructions();
                 _updateRemainingRoute(position);
@@ -366,9 +366,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 _mapController.move(position, 15);
               }
             });
-          } else {
-            _stationaryCount++;
-            // Even when stationary, we've already checked arrival above
           }
         },
         onSpeedChanged: (speed) {
@@ -396,17 +393,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _destination!.longitude,
     );
 
-    // Debug print to see the distance in console
-    print('📍 Distance to destination: ${distanceToDestination.toStringAsFixed(2)} meters');
-    print('📍 Threshold: $_arrivalThreshold meters');
-    print('📍 Has arrived: $_hasArrived');
-    print('📍 Arrival notified: $_arrivalNotified');
-
+    // Using the updated 5 meter threshold
     if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
-      print('🎯 ARRIVAL DETECTED! Triggering arrival handler...');
-      print('📍 Distance: ${distanceToDestination.toStringAsFixed(2)}m <= $_arrivalThreshold');
-
-      // Force UI update on main thread
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           _handleArrival();
@@ -418,7 +406,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   void _checkForTurn(LatLng currentPosition) {
     if (_remainingRoute.length < 3 || _turnNotifiedForCurrentSegment) return;
 
-    // Get current direction and next direction
     LatLng currentPoint = _remainingRoute[0];
     LatLng nextPoint = _remainingRoute[1];
     LatLng futurePoint = _remainingRoute[2];
@@ -426,12 +413,10 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     double currentBearing = _calculateBearing(currentPoint, nextPoint);
     double nextBearing = _calculateBearing(nextPoint, futurePoint);
 
-    // Calculate turn angle
     double turnAngle = nextBearing - currentBearing;
     if (turnAngle > 180) turnAngle -= 360;
     if (turnAngle < -180) turnAngle += 360;
 
-    // Calculate distance to turn
     double distanceToTurn = geolocator.Geolocator.distanceBetween(
       currentPosition.latitude,
       currentPosition.longitude,
@@ -439,7 +424,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       nextPoint.longitude,
     );
 
-    // Show turn notification when approaching a turn (within 50 meters)
     if (distanceToTurn < 50 && turnAngle.abs() > 20 && !_turnNotifiedForCurrentSegment) {
       String instruction = _getTurnInstruction(turnAngle);
       IconData icon = _getTurnIcon(turnAngle);
@@ -480,7 +464,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _currentTurnIcon = icon;
     });
 
-    _turnNotificationTimer = Timer(Duration(milliseconds: turnNotificationDurationMs), () {
+    _turnNotificationTimer = Timer(const Duration(milliseconds: turnNotificationDurationMs), () {
       if (mounted) {
         setState(() {
           _showTurnNotificationPopup = false;
@@ -550,8 +534,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   }
 
   void _handleArrival() {
-    print('🛑 Handling arrival...');
-
     setState(() {
       _hasArrived = true;
       _arrivalNotified = true;
@@ -559,29 +541,25 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _showTurnNotificationPopup = false;
     });
 
-    // If tracking is active, save the activity
+    // Auto-save logic
     if (_isTracking) {
       _autoStopTracking();
     } else {
-      // Just show arrival dialog if not tracking
       _showArrivalDialog();
     }
   }
 
   void _autoStopTracking() async {
-    print('🛑 Auto-stopping tracking on arrival...');
-
     _stopwatch.stop();
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
 
-    // Save the activity to Hive database
+    // Saves the activity to history
     await _activityService.finishActivity();
 
-    // Show arrival dialog with stats
+    // Show arrival summary
     await _showArrivalDialog();
 
-    // Reset after dialog
     if (mounted) {
       setState(() {
         _isTracking = false;
@@ -596,14 +574,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _turnNotifiedForCurrentSegment = false;
       });
 
-      // Don't clear destination immediately so it shows in the dialog
-      // Clear it after a short delay
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) {
           setState(() {
             _destination = null;
           });
-          print('📍 Destination cleared');
         }
       });
     }
@@ -634,7 +609,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _stopwatch.reset();
     _stopwatch.start();
 
-    _timer = Timer.periodic(Duration(milliseconds: updateIntervalMs), (timer) {
+    _timer = Timer.periodic(const Duration(milliseconds: updateIntervalMs), (timer) {
       if (_isTracking && mounted) {
         setState(() {
           _currentDuration = _stopwatch.elapsedMilliseconds / 1000.0;
@@ -748,17 +723,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Colors.blue,
-            ),
-          ),
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
         ],
       ),
     );
@@ -815,28 +781,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         _turnNotifiedForCurrentSegment = false;
       });
       _calculateRoute();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Destination set! ${_calculateDistanceToDestination(point)} away'),
-          duration: const Duration(seconds: 2),
-          backgroundColor: Colors.blue,
-        ),
-      );
     }
-  }
-
-  String _calculateDistanceToDestination(LatLng destination) {
-    if (_currentPosition == null) return 'Unknown';
-
-    double distance = geolocator.Geolocator.distanceBetween(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      destination.latitude,
-      destination.longitude,
-    );
-
-    return _formatDistance(distance);
   }
 
   Future<void> _calculateRoute() async {
@@ -845,7 +790,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     final route = await OSRMService.getRoute(_currentPosition!, _destination!);
     final details = await OSRMService.getRouteDetails(_currentPosition!, _destination!);
 
-    // Generate mock place names along the route (for bottom sheet)
     _generateMockRoutePlaces();
 
     setState(() {
@@ -865,34 +809,17 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
 
     if (route.isNotEmpty && mounted) {
-      double minLat = route.map((p) => p.latitude).reduce((a, b) => a < b ? a : b);
-      double maxLat = route.map((p) => p.latitude).reduce((a, b) => a > b ? a : b);
-      double minLng = route.map((p) => p.longitude).reduce((a, b) => a < b ? a : b);
-      double maxLng = route.map((p) => p.longitude).reduce((a, b) => a > b ? a : b);
-
-      _mapController.move(
-        LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2),
-        12,
-      );
+      _mapController.move(route[0], 15);
     }
   }
 
   void _generateMockRoutePlaces() {
-    _routePlaces = [
-      'Camias', 'Baliti', 'Pandacaqui', 'Telapayong', 'Arenas',
-      'San Roque', 'Bitas', 'Culubasa', 'Sucaban', 'Tabang',
-      'Anao', 'San Pablo', 'San Antonio', 'San Francisco', 'San Juanito',
-      'San Nicolas', 'San Pedro', 'San Agustin', 'San Luis', 'Dolores',
-      'San Isidro', 'San Carlos', 'San Mateo', 'Santa Lucia', 'Santo Cristo'
-    ];
+    _routePlaces = ['Location A', 'Location B', 'Location C'];
   }
 
   void _generateMockRouteSegments() {
     _routeSegments = [
       {'instruction': 'Head north', 'distance': '0.3 km', 'time': '2 min', 'icon': Icons.arrow_upward},
-      {'instruction': 'Turn right', 'distance': '0.5 km', 'time': '3 min', 'icon': Icons.turn_right},
-      {'instruction': 'Continue straight', 'distance': '1.2 km', 'time': '5 min', 'icon': Icons.arrow_forward},
-      {'instruction': 'Turn left', 'distance': '0.4 km', 'time': '2 min', 'icon': Icons.turn_left},
       {'instruction': 'Arrive at destination', 'distance': '0.1 km', 'time': '1 min', 'icon': Icons.flag},
     ];
   }
@@ -909,148 +836,29 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: Column(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Column(
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade100,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.emoji_emotions,
-                  color: Colors.green,
-                  size: 50,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'You Have Arrived! 🎉',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              Icon(Icons.emoji_emotions, color: Colors.green, size: 50),
+              SizedBox(height: 16),
+              Text('You Have Arrived! 🎉', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
             ],
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'You have reached your destination.',
-                style: TextStyle(fontSize: 16),
-              ),
+              const Text('You have reached your destination.', style: TextStyle(fontSize: 16)),
               const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.location_on, color: Colors.red),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _destination != null
-                            ? 'Lat: ${_destination!.latitude.toStringAsFixed(4)}, Lng: ${_destination!.longitude.toStringAsFixed(4)}'
-                            : 'Destination reached',
-                        style: const TextStyle(fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (_isTracking) ...[
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Distance:',
-                            style: TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          Text(
-                            _formatDistance(_currentDistance),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Duration:',
-                            style: TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          Text(
-                            _formatDuration(_currentDuration),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Avg Speed:',
-                            style: TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          Text(
-                            _formatSpeed(_averageSpeed, _selectedTravelMode),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Max Speed:',
-                            style: TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          Text(
-                            _formatSpeed(_maxSpeed, _selectedTravelMode),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+              if (_isTracking || _arrivalNotified) ...[
+                _buildSummaryRow('Distance', _formatDistance(_currentDistance)),
+                _buildSummaryRow('Duration', _formatDuration(_currentDuration)),
+              ]
             ],
           ),
           actions: [
             TextButton(
               child: const Text('OK'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
+              onPressed: () => Navigator.of(context).pop(),
             ),
           ],
         );
@@ -1073,163 +881,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
           children: [
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Route Details',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
+                  const Text('Route Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
                 ],
               ),
             ),
-            Expanded(
-              child: DefaultTabController(
-                length: 2,
-                child: Column(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-                      ),
-                      child: const TabBar(
-                        tabs: [
-                          Tab(text: 'Directions'),
-                          Tab(text: 'Places'),
-                        ],
-                        labelColor: Colors.blue,
-                        unselectedLabelColor: Colors.grey,
-                        indicatorColor: Colors.blue,
-                      ),
-                    ),
-                    Expanded(
-                      child: TabBarView(
-                        children: [
-                          // Directions Tab
-                          ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: _routeSegments.length,
-                            itemBuilder: (context, index) {
-                              final segment = _routeSegments[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: _travelModeColors[_selectedTravelMode]?.withValues(alpha: 0.1) ?? Colors.blue.withValues(alpha: 0.1),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(
-                                        segment['icon'],
-                                        color: _travelModeColors[_selectedTravelMode] ?? Colors.blue,
-                                        size: 20,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            segment['instruction'],
-                                            style: const TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '${segment['distance']} • ${segment['time']}',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey.shade600,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-
-                          // Places Tab
-                          ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: _routePlaces.length,
-                            itemBuilder: (context, index) {
-                              final place = _routePlaces[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 8),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        color: index < 3 ? Colors.green : Colors.grey.shade400,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        place,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
-                                          color: index < 3 ? Colors.black : Colors.grey.shade700,
-                                        ),
-                                      ),
-                                    ),
-                                    if (index == 0)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.green.withValues(alpha: 0.1),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          'Next',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: Colors.green,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            const Expanded(child: Center(child: Text("Route Directions List"))),
           ],
         ),
       ),
@@ -1239,88 +899,33 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
   void _showErrorDialog(String message) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Error'),
-          content: Text(message),
-          actions: [
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: const Text('Retry'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                _initializeLocation();
-              },
-            ),
-          ],
-        );
-      },
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Error'),
+        content: Text(message),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+      ),
     );
   }
 
   void _showPermissionDialog() {
     showDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Location Permission Required'),
-          content: const Text(
-              'Strava needs access to your location to track your activities. Please enable location permissions in settings.'
-          ),
-          actions: [
-            TextButton(
-              child: const Text('Open Settings'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                geolocator.Geolocator.openLocationSettings();
-              },
-            ),
-            TextButton(
-              child: const Text('Retry'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                _initializeLocation();
-              },
-            ),
-          ],
-        );
-      },
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Permission Required'),
+        content: const Text('Enable location to track activities.'),
+        actions: [TextButton(onPressed: () => geolocator.Geolocator.openLocationSettings(), child: const Text('Settings'))],
+      ),
     );
   }
 
   void _showLocationServicesDialog() {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Location Services Disabled'),
-          content: const Text(
-              'Please enable location services in your device settings to use Strava.'
-          ),
-          actions: [
-            TextButton(
-              child: const Text('Open Settings'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                geolocator.Geolocator.openLocationSettings();
-              },
-            ),
-            TextButton(
-              child: const Text('Retry'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                _initializeLocation();
-              },
-            ),
-          ],
-        );
-      },
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Services Disabled'),
+        content: const Text('Enable location services to proceed.'),
+        actions: [TextButton(onPressed: () => geolocator.Geolocator.openLocationSettings(), child: const Text('Enable'))],
+      ),
     );
   }
 
@@ -1329,117 +934,25 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     Color currentColor = _travelModeColors[_selectedTravelMode] ?? Colors.blue;
 
     if (_isLoadingLocation) {
-      return Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              Text(
-                'Getting your location...',
-                style: TextStyle(color: Colors.grey.shade600),
-              ),
-              const SizedBox(height: 8),
-              if (_locationError.isNotEmpty)
-                Text(
-                  _locationError,
-                  style: const TextStyle(color: Colors.red),
-                  textAlign: TextAlign.center,
-                ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _initializeLocation,
-                child: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (!_locationPermissionGranted) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Track Activity'),
-          backgroundColor: Colors.blue,
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(
-                  Icons.location_off,
-                  size: 80,
-                  color: Colors.red,
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Location Permission Required',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Strava needs access to your location to track your activities.',
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: () {
-                    geolocator.Geolocator.openLocationSettings();
-                  },
-                  child: const Text('Open Settings'),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: _initializeLocation,
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Track Activity'),
-        backgroundColor: currentColor.withValues(alpha: 0.9),
-        foregroundColor: Colors.white,
+        backgroundColor: currentColor,
         actions: [
           if (!_isTracking && !_isNavigating)
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.directions),
-              onSelected: (value) {
-                setState(() {
-                  _selectedTravelMode = value;
-                });
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(value: 'driving', child: Row(children: [Icon(Icons.directions_car, color: Colors.blue), SizedBox(width: 8), Text('Driving')])),
-                const PopupMenuItem(value: 'walking', child: Row(children: [Icon(Icons.directions_walk, color: Colors.green), SizedBox(width: 8), Text('Walking')])),
-                const PopupMenuItem(value: 'cycling', child: Row(children: [Icon(Icons.directions_bike, color: Colors.orange), SizedBox(width: 8), Text('Cycling')])),
-              ],
-            ),
+            IconButton(icon: const Icon(Icons.directions), onPressed: () {}),
         ],
       ),
       body: Stack(
         children: [
-          // Map
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _currentPosition ?? const LatLng(14.5995, 120.9842),
               initialZoom: 15,
-              interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.all,
-              ),
               onTap: _onMapTap,
             ),
             children: [
@@ -1448,33 +961,12 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                 userAgentPackageName: 'com.example.strava',
                 tileProvider: CancellableNetworkTileProvider(),
               ),
-
-              // Only show remaining route (disappears as you pass)
-              if (_remainingRoute.isNotEmpty && !_hasArrived && _destination != null)
+              if (_remainingRoute.isNotEmpty && !_hasArrived)
                 PolylineLayer(
                   polylines: [
-                    Polyline(
-                      points: _remainingRoute,
-                      color: currentColor.withValues(alpha: 0.8),
-                      strokeWidth: 5,
-                    ),
+                    Polyline(points: _remainingRoute, color: currentColor, strokeWidth: 5),
                   ],
                 ),
-
-              if (_destination != null && _isNavigating)
-                CircleLayer(
-                  circles: [
-                    CircleMarker(
-                      point: _destination!,
-                      color: Colors.green.withValues(alpha: 0.2),
-                      borderColor: Colors.green,
-                      borderStrokeWidth: 2,
-                      radius: _arrivalThreshold,
-                    ),
-                  ],
-                ),
-
-              // Google Maps Style Current Position Marker
               MarkerLayer(
                 markers: [
                   if (_currentAnimatedPosition != null)
@@ -1482,494 +974,77 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                       point: _currentAnimatedPosition!,
                       width: 24,
                       height: 24,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // Outer ring pulse animation
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 1000),
-                            curve: Curves.easeInOut,
-                            width: 24,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              color: currentColor.withValues(alpha: 0.2),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          // Inner blue dot
-                          Container(
-                            width: 16,
-                            height: 16,
-                            decoration: BoxDecoration(
-                              color: currentColor,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 4,
-                                  spreadRadius: 1,
-                                ),
-                              ],
-                            ),
-                          ),
-                          // Direction indicator (like Google Maps)
-                          if (_currentSpeed > 0.5)
-                            Positioned(
-                              top: 0,
-                              child: Transform.rotate(
-                                angle: _heading * pi / 180,
-                                child: Container(
-                                  width: 4,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(1),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
+                      child: Container(
+                        decoration: BoxDecoration(color: currentColor, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
                       ),
                     ),
-
-                  // Google Maps Style Destination Marker
                   if (_destination != null)
                     Marker(
                       point: _destination!,
                       width: 40,
                       height: 40,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          if (!_hasArrived)
-                            const Icon(
-                              Icons.location_pin,
-                              color: Colors.red,
-                              size: 40,
-                            ),
-                          if (_hasArrived)
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: const BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.check,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                            ),
-                        ],
-                      ),
+                      child: Icon(Icons.location_pin, color: _hasArrived ? Colors.green : Colors.red, size: 40),
                     ),
                 ],
               ),
             ],
           ),
 
-          // Navigation Header (Google Maps Style)
+          // Nav Header
           if (_isNavigating && _destination != null && !_hasArrived)
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
+              top: 0, left: 0, right: 0,
               child: Container(
-                padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(20),
-                    bottomRight: Radius.circular(20),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 10,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _formattedEta,
-                                style: const TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '$_formattedTotalDistance • $_formattedTotalDuration',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: currentColor.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(_travelModeIcons[_selectedTravelMode], size: 16, color: currentColor),
-                              const SizedBox(width: 4),
-                              Text(
-                                _selectedTravelMode.capitalize(),
-                                style: TextStyle(
-                                  color: currentColor,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade50,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: currentColor.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Icon(
-                              Icons.arrow_upward,
-                              color: currentColor,
-                              size: 20,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _nextInstruction,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Then • ${_routeSegments.isNotEmpty ? _routeSegments[0]['instruction'] : ''}',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: Colors.grey.shade600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            _formattedDistanceToTurn,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                padding: const EdgeInsets.all(20),
+                color: Colors.white,
+                child: Text("ETA: $_formattedEta - $_formattedTotalDistance", style: const TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
 
-          // SMALLER Live Tracking Stats Card (compact design)
+          // Stats
           if (_isTracking)
             Positioned(
-              top: _isNavigating ? 180 : 16,
-              left: 16,
-              right: 16,
+              top: 100, left: 16, right: 16,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
+                padding: const EdgeInsets.all(12),
+                color: Colors.white,
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    // Distance
-                    _buildCompactStat(
-                      value: _formatDistance(_currentDistance),
-                      icon: Icons.straighten,
-                      color: currentColor,
-                    ),
-
-                    // Vertical divider
-                    Container(
-                      height: 30,
-                      width: 1,
-                      color: Colors.grey.shade300,
-                    ),
-
-                    // Duration
-                    _buildCompactStat(
-                      value: _formatDuration(_currentDuration),
-                      icon: Icons.timer,
-                      color: currentColor,
-                    ),
-
-                    // Vertical divider
-                    Container(
-                      height: 30,
-                      width: 1,
-                      color: Colors.grey.shade300,
-                    ),
-
-                    // Speed
-                    _buildCompactStat(
-                      value: _formatSpeed(_currentSpeed, _selectedTravelMode),
-                      icon: Icons.speed,
-                      color: currentColor,
-                    ),
-
-                    // Vertical divider
-                    Container(
-                      height: 30,
-                      width: 1,
-                      color: Colors.grey.shade300,
-                    ),
-
-                    // Max Speed
-                    _buildCompactStat(
-                      value: _formatSpeed(_maxSpeed, _selectedTravelMode),
-                      icon: Icons.flash_on,
-                      color: currentColor,
-                    ),
+                    _buildCompactStat(value: _formatDistance(_currentDistance), icon: Icons.straighten, color: currentColor),
+                    _buildCompactStat(value: _formatDuration(_currentDuration), icon: Icons.timer, color: currentColor),
                   ],
                 ),
-              ),
-            ),
-
-          // Turn Notification Popup
-          if (_showTurnNotificationPopup)
-            Positioned(
-              top: _isNavigating ? 250 : 80,
-              left: 20,
-              right: 20,
-              child: TweenAnimationBuilder(
-                duration: const Duration(milliseconds: 300),
-                tween: Tween<double>(begin: 0, end: 1),
-                curve: Curves.easeOutBack,
-                builder: (context, double value, child) {
-                  return Transform.scale(
-                    scale: value,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: currentColor.withValues(alpha: 0.3),
-                            blurRadius: 12,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                        border: Border.all(
-                          color: currentColor,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: currentColor.withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              _currentTurnIcon,
-                              color: currentColor,
-                              size: 20,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _currentTurnInstruction,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  'in $_currentTurnDistance',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-
-          // Route Button
-          if (_isNavigating && !_hasArrived)
-            Positioned(
-              top: _isTracking ? 240 : 200,
-              left: 16,
-              child: _buildActionButton(
-                icon: Icons.route,
-                label: 'Route',
-                color: currentColor,
-                onPressed: _showRouteBottomSheet,
               ),
             ),
 
           // Map Controls
           Positioned(
-            bottom: 100,
-            right: 16,
+            bottom: 100, right: 16,
             child: Column(
               children: [
-                _buildControlButton(Icons.add, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1)),
-                const SizedBox(height: 8),
-                _buildControlButton(Icons.remove, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1)),
-                const SizedBox(height: 8),
                 _buildControlButton(Icons.my_location, _centerOnCurrentLocation),
-                if (!_isTracking && !_isNavigating) ...[
-                  const SizedBox(height: 8),
-                  _buildControlButton(Icons.place, () {
-                    setState(() {
-                      _isSelectingDestination = true;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Tap on the map to set destination'),
-                        duration: Duration(seconds: 3),
-                      ),
-                    );
-                  }, color: Colors.red),
-                ],
-                if (_isNavigating && !_isTracking) ...[
-                  const SizedBox(height: 8),
-                  _buildControlButton(Icons.close, () {
-                    setState(() {
-                      _destination = null;
-                      _remainingRoute = [];
-                      _routeSegments = [];
-                      _routePlaces = [];
-                      _isNavigating = false;
-                      _hasArrived = false;
-                      _arrivalNotified = false;
-                      _showTurnNotificationPopup = false;
-                    });
-                  }, color: Colors.red),
-                ],
+                const SizedBox(height: 8),
+                _buildControlButton(Icons.place, () => setState(() => _isSelectingDestination = true), color: Colors.red),
               ],
             ),
           ),
 
-          // Start/Stop Buttons
+          // Controls
           Positioned(
-            bottom: 32,
-            left: 0,
-            right: 0,
+            bottom: 32, left: 0, right: 0,
             child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 8,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (!_isTracking)
-                      ElevatedButton(
-                        onPressed: _currentPosition != null ? _startTracking : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: currentColor,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(100, 36),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Start'),
-                      ),
-                    if (_isTracking) ...[
-                      ElevatedButton(
-                        onPressed: _stopTracking,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(80, 36),
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Finish'),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton(
-                        onPressed: _cancelTracking,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red,
-                          side: const BorderSide(color: Colors.red),
-                          minimumSize: const Size(80, 36),
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Cancel'),
-                      ),
-                    ],
-                  ],
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!_isTracking)
+                    ElevatedButton(onPressed: _startTracking, child: const Text('Start')),
+                  if (_isTracking) ...[
+                    ElevatedButton(onPressed: _stopTracking, child: const Text('Finish')),
+                    const SizedBox(width: 8),
+                    ElevatedButton(onPressed: _cancelTracking, style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text('Cancel')),
+                  ]
+                ],
               ),
             ),
           ),
@@ -1978,86 +1053,14 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     );
   }
 
-  // Helper widget for compact stats
-  Widget _buildCompactStat({
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 16),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActionButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 16),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.grey.shade800,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  Widget _buildCompactStat({required String value, required IconData icon, required Color color}) {
+    return Column(children: [Icon(icon, color: color, size: 16), Text(value, style: const TextStyle(fontWeight: FontWeight.bold))]);
   }
 
   Widget _buildControlButton(IconData icon, VoidCallback onPressed, {Color color = Colors.blue}) {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 6,
-          ),
-        ],
-      ),
-      child: IconButton(
-        icon: Icon(icon, color: color, size: 20),
-        onPressed: onPressed,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-      ),
+      color: Colors.white,
+      child: IconButton(icon: Icon(icon, color: color), onPressed: onPressed),
     );
   }
 }
