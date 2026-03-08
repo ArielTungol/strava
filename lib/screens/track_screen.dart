@@ -540,18 +540,16 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
 
-    // Save the activity to Hive database
     await _activityService.finishActivity();
 
-    // Show arrival dialog with stats
-    await _showArrivalDialog();
+    _showArrivalDialog();
 
-    // Show activity summary
+    await Future.delayed(const Duration(milliseconds: 500));
+
     if (mounted) {
       _showActivitySummary();
     }
 
-    // Reset after summary
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
@@ -865,8 +863,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     }
   }
 
-  Future<void> _showArrivalDialog() async {
-    return showDialog(
+  void _showArrivalDialog() {
+    showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
@@ -928,63 +926,6 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              if (_isTracking) ...[
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Distance:'),
-                          Text(
-                            _formatDistance(_currentDistance),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Duration:'),
-                          Text(
-                            _formatDuration(_currentDuration),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Avg Speed:'),
-                          Text(
-                            _formatSpeed(_averageSpeed, _selectedTravelMode),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Max Speed:'),
-                          Text(
-                            _formatSpeed(_maxSpeed, _selectedTravelMode),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
             ],
           ),
           actions: [
