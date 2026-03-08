@@ -55,7 +55,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
   // Arrival detection
   bool _hasArrived = false;
-  final double _arrivalThreshold = 20.0;
+  final double _arrivalThreshold = 1.0; // Changed to 1 meter for immediate detection
   bool _arrivalNotified = false;
 
   // Navigation info
@@ -117,6 +117,15 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeLocation();
     });
+  }
+
+  @override
+  void dispose() {
+    _markerAnimationController?.dispose();
+    _timer?.cancel();
+    _turnNotificationTimer?.cancel();
+    _locationService.stopTracking();
+    super.dispose();
   }
 
   void _initializeMarkerAnimation() {
@@ -285,6 +294,11 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
         onPositionChanged: (position) {
           if (!mounted) return;
 
+          // ALWAYS check for arrival on EVERY position update, regardless of movement
+          if (_destination != null && !_hasArrived && mounted) {
+            _checkArrival(); // This will trigger arrival if within threshold
+          }
+
           double distanceMoved = 0;
           if (_stablePosition != null) {
             distanceMoved = geolocator.Geolocator.distanceBetween(
@@ -307,8 +321,8 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
 
               _animateMarkerToNewPosition(position);
 
+              // Only update navigation if not arrived
               if (_destination != null && !_hasArrived) {
-                _checkArrival();
                 _updateNavigationInstructions();
                 _updateRemainingRoute(position);
                 _checkForTurn(position);
@@ -354,6 +368,7 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
             });
           } else {
             _stationaryCount++;
+            // Even when stationary, we've already checked arrival above
           }
         },
         onSpeedChanged: (speed) {
@@ -368,6 +383,35 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       );
     } catch (e) {
       _showErrorDialog('Error starting location tracking: $e');
+    }
+  }
+
+  void _checkArrival() {
+    if (_destination == null || _currentPosition == null || _hasArrived) return;
+
+    double distanceToDestination = geolocator.Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      _destination!.latitude,
+      _destination!.longitude,
+    );
+
+    // Debug print to see the distance in console
+    print('📍 Distance to destination: ${distanceToDestination.toStringAsFixed(2)} meters');
+    print('📍 Threshold: $_arrivalThreshold meters');
+    print('📍 Has arrived: $_hasArrived');
+    print('📍 Arrival notified: $_arrivalNotified');
+
+    if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
+      print('🎯 ARRIVAL DETECTED! Triggering arrival handler...');
+      print('📍 Distance: ${distanceToDestination.toStringAsFixed(2)}m <= $_arrivalThreshold');
+
+      // Force UI update on main thread
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _handleArrival();
+        }
+      });
     }
   }
 
@@ -505,22 +549,9 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     });
   }
 
-  void _checkArrival() {
-    if (_destination == null || _currentPosition == null || _hasArrived) return;
-
-    double distanceToDestination = geolocator.Geolocator.distanceBetween(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      _destination!.latitude,
-      _destination!.longitude,
-    );
-
-    if (distanceToDestination <= _arrivalThreshold && !_arrivalNotified) {
-      _handleArrival();
-    }
-  }
-
   void _handleArrival() {
+    print('🛑 Handling arrival...');
+
     setState(() {
       _hasArrived = true;
       _arrivalNotified = true;
@@ -528,14 +559,18 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
       _showTurnNotificationPopup = false;
     });
 
+    // If tracking is active, save the activity
     if (_isTracking) {
       _autoStopTracking();
     } else {
+      // Just show arrival dialog if not tracking
       _showArrivalDialog();
     }
   }
 
   void _autoStopTracking() async {
+    print('🛑 Auto-stopping tracking on arrival...');
+
     _stopwatch.stop();
     _timer?.cancel();
     _turnNotificationTimer?.cancel();
@@ -547,23 +582,31 @@ class _TrackScreenState extends State<TrackScreen> with TickerProviderStateMixin
     await _showArrivalDialog();
 
     // Reset after dialog
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() {
-          _isTracking = false;
-          _isNavigating = false;
-          _destination = null;
-          _remainingRoute = [];
-          _hasArrived = false;
-          _arrivalNotified = false;
-          _lastPositionForDistance = null;
-          _lastTimeForSpeed = null;
-          _showTurnNotificationPopup = false;
-          _currentRouteIndex = 0;
-          _turnNotifiedForCurrentSegment = false;
-        });
-      }
-    });
+    if (mounted) {
+      setState(() {
+        _isTracking = false;
+        _isNavigating = false;
+        _remainingRoute = [];
+        _hasArrived = false;
+        _arrivalNotified = false;
+        _lastPositionForDistance = null;
+        _lastTimeForSpeed = null;
+        _showTurnNotificationPopup = false;
+        _currentRouteIndex = 0;
+        _turnNotifiedForCurrentSegment = false;
+      });
+
+      // Don't clear destination immediately so it shows in the dialog
+      // Clear it after a short delay
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) {
+          setState(() {
+            _destination = null;
+          });
+          print('📍 Destination cleared');
+        }
+      });
+    }
   }
 
   void _startTracking() {
