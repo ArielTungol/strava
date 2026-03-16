@@ -28,8 +28,7 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  # Critical fix for background fetch static framework
-  use_frameworks! :linkage => :static
+  use_frameworks!
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
@@ -48,11 +47,14 @@ post_install do |installer|
         'PERMISSION_LOCATION_WHEN_IN_USE=1',
       ]
 
+      # Set minimum deployment target
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+
+      # Set Swift version
       config.build_settings['SWIFT_VERSION'] = '5.0'
 
-      # Allow static frameworks (fix for TSBackgroundFetch)
-      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+      # Enable modules for better compatibility
+      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
     end
   end
 end

@@ -46,37 +46,27 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- ========== LOCATION PERMISSIONS ========== -->
-	<!-- Required for GPS tracking during activities -->
+	<!-- Location Permission Descriptions -->
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Strava needs access to your location to track your runs, walks, and cycling routes in real-time on the map</string>
-
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Strava needs access to your location to track your activities even when the app is in the background, so you can record your workouts without keeping the app open</string>
-
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Strava needs access to your location to continuously track your runs, walks, and cycling activities</string>
 
-	<!-- ========== BACKGROUND MODES ========== -->
-	<!-- Allows tracking when app is in background -->
+	<!-- Background Modes -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
 		<string>fetch</string>
-		<string>remote-notification</string>
 	</array>
 
-	<!-- ========== MOTION DATA ========== -->
-	<!-- Optional but useful for step counting and activity recognition -->
+	<!-- Motion Data -->
 	<key>NSMotionUsageDescription</key>
-	<string>Strava uses motion data to enhance activity tracking accuracy and detect when you're running, walking, or cycling</string>
+	<string>Strava uses motion data to enhance activity tracking accuracy</string>
 
-	<!-- ========== NOTIFICATIONS ========== -->
-	<!-- For activity reminders and safety alerts -->
+	<!-- Notifications -->
 	<key>NSUserNotificationUsageDescription</key>
-	<string>Strava sends notifications for activity reminders, safety alerts, and social interactions</string>
-
-	<!-- ========== REMOVED PERMISSIONS ========== -->
-	<!-- HealthKit, Camera, Photo Library, and Contacts permissions removed as they're not needed -->
+	<string>Strava sends notifications for activity reminders and safety alerts</string>
 </dict>
 </plist>
