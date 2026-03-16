@@ -8,7 +8,7 @@ part of 'route_point.dart';
 
 class RoutePointAdapter extends TypeAdapter<RoutePoint> {
   @override
-  final int typeId = 1;
+  final int typeId = 2;
 
   @override
   RoutePoint read(BinaryReader reader) {
@@ -20,15 +20,17 @@ class RoutePointAdapter extends TypeAdapter<RoutePoint> {
       latitude: fields[0] as double,
       longitude: fields[1] as double,
       timestamp: fields[2] as DateTime,
-      speed: fields[3] as double,
-      altitude: fields[4] as double,
+      altitude: fields[3] as double?,
+      speed: fields[4] as double?,
+      accuracy: fields[5] as double?,
+      heartRate: fields[6] as double?,
     );
   }
 
   @override
   void write(BinaryWriter writer, RoutePoint obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(7)
       ..writeByte(0)
       ..write(obj.latitude)
       ..writeByte(1)
@@ -36,9 +38,13 @@ class RoutePointAdapter extends TypeAdapter<RoutePoint> {
       ..writeByte(2)
       ..write(obj.timestamp)
       ..writeByte(3)
-      ..write(obj.speed)
+      ..write(obj.altitude)
       ..writeByte(4)
-      ..write(obj.altitude);
+      ..write(obj.speed)
+      ..writeByte(5)
+      ..write(obj.accuracy)
+      ..writeByte(6)
+      ..write(obj.heartRate);
   }
 
   @override

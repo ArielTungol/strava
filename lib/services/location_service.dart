@@ -22,7 +22,6 @@ class LocationService {
 
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      print('📍 Location services are disabled');
       return false;
     }
 
@@ -30,13 +29,11 @@ class LocationService {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        print('📍 Location permissions are denied');
         return false;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      print('📍 Location permissions are permanently denied');
       return false;
     }
 
@@ -54,10 +51,8 @@ class LocationService {
       );
 
       _currentPosition = position;
-      print('📍 Got location: ${position.latitude}, ${position.longitude}');
       return LatLng(position.latitude, position.longitude);
     } catch (e) {
-      print('📍 Error getting location: $e');
       return null;
     }
   }
@@ -66,17 +61,11 @@ class LocationService {
     required Function(LatLng) onPositionChanged,
     Function(double)? onSpeedChanged,
   }) async {
-    bool hasPermission = await checkAndRequestPermission();
-    if (!hasPermission) {
-      print('📍 Cannot start tracking - no permission');
-      return;
-    }
-
     _positionStream?.cancel();
 
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 0, // CRITICAL: Updates on EVERY movement, even 0.1 meters!
+      distanceFilter: 0,
     );
 
     _isTracking = true;
@@ -85,11 +74,9 @@ class LocationService {
       locationSettings: locationSettings,
     ).listen((Position position) {
       _currentPosition = position;
-      print('📍 Position update: ${position.latitude}, ${position.longitude}, speed: ${position.speed}');
       onPositionChanged(LatLng(position.latitude, position.longitude));
       onSpeedChanged?.call(position.speed);
     }, onError: (error) {
-      print('📍 Location stream error: $error');
       _isTracking = false;
     });
   }
@@ -98,7 +85,6 @@ class LocationService {
     _positionStream?.cancel();
     _positionStream = null;
     _isTracking = false;
-    print('📍 Stopped tracking');
   }
 
   double calculateDistance(LatLng start, LatLng end) {

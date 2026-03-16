@@ -1,40 +1,20 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'track_screen.dart';
 import 'history_screen.dart';
 import 'stats_screen.dart';
-import '../services/location_service.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _selectedIndex = 0;
-  LatLng? _currentLocation;
-  final LocationService _locationService = LocationService();
-
-  @override
-  void initState() {
-    super.initState();
-    _getCurrentLocation();
-  }
-
-  Future<void> _getCurrentLocation() async {
-    try {
-      final location = await _locationService.getCurrentLocation();
-      setState(() {
-        _currentLocation = location;
-      });
-    } catch (e) {
-      print('Error getting location: $e');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +22,20 @@ class _HomeScreenState extends State<HomeScreen> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          TrackScreen(currentLocation: _currentLocation),
+          // Show different UI based on platform
+          if (kIsWeb)
+            const Center(
+              child: Text(
+                '📍 Web Demo Mode\n\n'
+                    'GPS tracking is not available on web.\n'
+                    'Please run on iOS device for full features.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16),
+              ),
+            )
+          else
+            const TrackScreen(),
+
           const HistoryScreen(),
           const StatsScreen(),
         ],
@@ -71,11 +64,5 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _locationService.dispose();
-    super.dispose();
   }
 }

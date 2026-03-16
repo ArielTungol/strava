@@ -14,114 +14,48 @@ workflows:
     scripts:
       - name: Setup Dependencies
         script: |
+          echo "📦 Getting Flutter packages..."
           flutter pub get
           flutter precache --ios
 
       - name: Generate Hive Adapters
         script: |
+          echo "🔨 Generating code..."
           flutter pub run build_runner build --delete-conflicting-outputs
 
-      - name: Fix and Install Pods
+      - name: Install CocoaPods
         script: |
+          echo "📱 Installing CocoaPods..."
           cd ios
-          
-          # Clean everything for fresh install
-          rm -rf Pods
-          rm -rf Podfile.lock
-          rm -rf Runner.xcworkspace
-          rm -rf .symlinks
-          
-          # Update Podfile to remove duplicate geolocator_apple
-          cat > Podfile << 'EOL'
-          # Uncomment this line to define a global platform for your project
-          platform :ios, '14.0'
-
-          # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
-          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
-
-          project 'Runner', {
-            'Debug' => :debug,
-            'Profile' => :release,
-            'Release' => :release,
-          }
-
-          def flutter_root
-            generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
-            unless File.exist?(generated_xcode_build_settings_path)
-              raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
-            end
-
-            File.foreach(generated_xcode_build_settings_path) do |line|
-              matches = line.match(/FLUTTER_ROOT\=(.*)/)
-              return matches[1].strip if matches
-            end
-            raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
-          end
-
-          require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
-
-          flutter_ios_podfile_setup
-
-          target 'Runner' do
-            use_frameworks!
-            use_modular_headers!
-
-            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-          end
-
-          post_install do |installer|
-            installer.pods_project.targets.each do |target|
-              flutter_additional_ios_build_settings(target)
-          
-              # Add location permissions to build settings
-              target.build_configurations.each do |config|
-                config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-                  '$(inherited)',
-                  'PERMISSION_LOCATION=1',
-                ]
-          
-                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-              end
-            end
-          end
-          EOL
-          
-          # Install CocoaPods
           pod install --repo-update
           cd ..
 
-      - name: Build and Package IPA
+      - name: Build iOS App
         script: |
-          # Build the iOS app
+          echo "🏗️ Building iOS app..."
           flutter build ios --release --no-codesign
           
-          # Check if build succeeded with better error handling
+          # Verify build succeeded
           if [ -d "build/ios/iphoneos/Runner.app" ]; then
             echo "✅ Build successful! Creating IPA..."
           
-            # Navigate to the output directory
+            # Create IPA for distribution
+            mkdir -p build/ios/iphoneos/Payload
+            cp -r build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          
             cd build/ios/iphoneos
-          
-            # Create Payload directory and package the app
-            mkdir -p Payload
-            cp -r Runner.app Payload/
-          
-            # Create IPA
-            zip -r $FCI_BUILD_DIR/unsigned_app.ipa Payload
+            zip -r ../../../unsigned_app.ipa Payload
             cd ../../..
           
-            echo "✅ IPA created successfully at: $FCI_BUILD_DIR/unsigned_app.ipa"
+            echo "✅ IPA created successfully: unsigned_app.ipa"
             echo "✅ Build completed!"
           else
-            echo "❌ Error: Runner.app not found. Build failed."
+            echo "❌ Error: Build failed - Runner.app not found"
             echo "Debug: Listing contents of build/ios/iphoneos:"
             ls -la build/ios/iphoneos/ || true
-            echo "Debug: Listing contents of build/ios:"
-            ls -la build/ios/ || true
             exit 1
           fi
 
     artifacts:
-      - "*.ipa"
-      - "build/ios/iphoneos/*.ipa"
-      - "build/ios/iphoneos/Runner.app"
+      - unsigned_app.ipa
+      - build/ios/iphoneos/Runner.app
