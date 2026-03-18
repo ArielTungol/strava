@@ -160,7 +160,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ START BUTTON FUNCTION - Begins tracking
+  /// START BUTTON FUNCTION - Begins tracking
   void _startTracking() {
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
@@ -221,7 +221,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ FINISH BUTTON FUNCTION - Saves to history
+  /// FINISH BUTTON FUNCTION - Saves to history
   Future<void> _stopTracking() async {
     debugPrint('🔴 Finish button pressed');
 
@@ -321,6 +321,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               if (_traveledPath.isNotEmpty) ...[
                 const Divider(),
                 _buildSummaryRow('Route Points', '${_traveledPath.length}'),
+                _buildSummaryRow('Total Distance', _formatDistance(_calculateTotalDistance())),
               ],
             ],
           ),
@@ -396,6 +397,17 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     double c = 2 * atan2(sqrt(a), sqrt(1 - a));
 
     return R * c;
+  }
+
+  // Calculate total distance traveled
+  double _calculateTotalDistance() {
+    if (_traveledPath.length < 2) return 0;
+
+    double total = 0;
+    for (int i = 0; i < _traveledPath.length - 1; i++) {
+      total += _calculateDistance(_traveledPath[i], _traveledPath[i + 1]);
+    }
+    return total;
   }
 
   @override
@@ -655,10 +667,10 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ),
           ),
 
-          // PATH INFO - Shows how many points in your path
+          // PATH INFO - Shows distance traveled
           if (isTracking && _traveledPath.length > 1)
             Positioned(
-              bottom: 100,
+              bottom: 140,
               left: 16,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -674,7 +686,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                     Icon(Icons.route, color: travelModeColor, size: 16),
                     const SizedBox(width: 4),
                     Text(
-                      '${_traveledPath.length} points',
+                      '${_formatDistance(_calculateTotalDistance())} traveled',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade800,

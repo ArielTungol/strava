@@ -65,26 +65,10 @@ class HistoryScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Start tracking your first activity!',
+            'Go to Track screen to start your first activity!',
             style: TextStyle(
               fontSize: 16,
               color: Colors.grey.shade600,
-            ),
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: () {
-              // You can add navigation to track screen here
-            },
-            icon: const Icon(Icons.play_arrow),
-            label: const Text('Start Now'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(30),
-              ),
             ),
           ),
         ],
