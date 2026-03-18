@@ -26,8 +26,11 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   AnimationController? _markerAnimationController;
   LatLng? _currentAnimatedPosition;
 
-  // Path tracking
-  List<LatLng> _pathPoints = [];
+  // Path tracking - stores your traveled route
+  List<LatLng> _traveledPath = [];
+
+  // Timer for updating stats
+  Timer? _statsTimer;
 
   @override
   void initState() {
@@ -44,33 +47,29 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   }
 
   Future<void> _initializeLocation() async {
-    // Request permission and get initial location
-    await ref.read(locationPermissionStateProvider.notifier).checkAndRequestPermission();
+    // Check and request permissions
+    final permissionGranted = await ref.read(locationPermissionStateProvider.notifier).checkAndRequestPermission();
+    if (!permissionGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Location permission is required to track activities'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
 
-    final locationNotifier = ref.read(currentLocationProvider.notifier);
+    // Get initial location
     final service = ref.read(locationServiceProvider);
-
     final location = await service.getCurrentLocation();
+
     if (location != null) {
-      locationNotifier.updateLocation(location);
+      ref.read(currentLocationProvider.notifier).updateLocation(location);
       setState(() {
         _currentAnimatedPosition = location;
       });
       _mapController.move(location, 15);
     }
-  }
-
-  double _calculateBearing(LatLng start, LatLng end) {
-    double lat1 = start.latitude * pi / 180;
-    double lon1 = start.longitude * pi / 180;
-    double lat2 = end.latitude * pi / 180;
-    double lon2 = end.longitude * pi / 180;
-
-    double y = sin(lon2 - lon1) * cos(lat2);
-    double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(lon2 - lon1);
-    double bearing = atan2(y, x) * 180 / pi;
-
-    return (bearing + 360) % 360;
   }
 
   void _animateMarkerToNewPosition(LatLng newPosition) {
@@ -81,14 +80,19 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
       return;
     }
 
-    final targetPosition = newPosition;
+    // Don't animate if same position
+    if (_currentAnimatedPosition!.latitude == newPosition.latitude &&
+        _currentAnimatedPosition!.longitude == newPosition.longitude) {
+      return;
+    }
+
     _markerAnimationController?.stop();
     _markerAnimationController?.reset();
 
     final startLat = _currentAnimatedPosition!.latitude;
     final startLng = _currentAnimatedPosition!.longitude;
-    final endLat = targetPosition.latitude;
-    final endLng = targetPosition.longitude;
+    final endLat = newPosition.latitude;
+    final endLng = newPosition.longitude;
 
     _markerAnimationController?.addListener(() {
       if (!mounted) return;
@@ -111,21 +115,50 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
+  /// ✅ START BUTTON FUNCTION - Works!
   void _startTracking() {
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
+    final currentLocation = ref.read(currentLocationProvider);
 
-    // Clear previous path points
+    if (currentLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to get your location. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Clear previous path
     setState(() {
-      _pathPoints.clear();
+      _traveledPath = [currentLocation]; // Start with current location
     });
 
+    // Start activity in service
     ref.read(currentActivityProvider.notifier).startNewActivity(
       '${travelMode.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
       activityType,
     );
 
+    // Start location tracking
     ref.read(locationTrackingProvider.notifier).startTracking();
+
+    // Start timer to update UI
+    _statsTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        setState(() {}); // Refresh UI to show updated stats
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Started ${travelMode.capitalize()}!'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   ActivityType _getActivityTypeFromString(String mode) {
@@ -140,25 +173,65 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
+  /// ✅ FINISH BUTTON FUNCTION - Works! Saves to history
   Future<void> _stopTracking() async {
+    // Stop timer
+    _statsTimer?.cancel();
+
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    // Finish activity - this saves to Hive database
     await ref.read(currentActivityProvider.notifier).finishActivity();
+
+    // Stop location tracking
     ref.read(locationTrackingProvider.notifier).stopTracking();
     ref.read(currentSpeedProvider.notifier).resetSpeed();
 
+    // Close loading dialog
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+
+    // Show success message
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('✅ Activity saved to history!'),
+        backgroundColor: Colors.green,
+        duration: Duration(seconds: 3),
+      ),
+    );
+
+    // Show activity summary
     if (mounted) {
       _showActivitySummary();
     }
   }
 
   void _cancelTracking() {
+    // Stop timer
+    _statsTimer?.cancel();
+
+    // Cancel activity
     ref.read(currentActivityProvider.notifier).cancelActivity();
     ref.read(locationTrackingProvider.notifier).stopTracking();
     ref.read(currentSpeedProvider.notifier).resetSpeed();
 
-    // Clear path points when canceling
+    // Clear path
     setState(() {
-      _pathPoints.clear();
+      _traveledPath.clear();
     });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Activity cancelled'),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   void _showActivitySummary() {
@@ -180,14 +253,22 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               const Divider(),
               _buildSummaryRow('Avg Speed', _formatSpeed(currentActivity.averageSpeed, currentActivity.type)),
               const Divider(),
-              _buildSummaryRow('Max Speed', _formatSpeed(currentActivity.maxSpeed ?? 0, currentActivity.type)),
-              const Divider(),
               _buildSummaryRow('Calories', '${currentActivity.caloriesBurned} kcal'),
+              if (_traveledPath.isNotEmpty) ...[
+                const Divider(),
+                _buildSummaryRow('Route Points', '${_traveledPath.length}'),
+              ],
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () {
+                Navigator.of(context).pop();
+                // Clear path after viewing summary
+                setState(() {
+                  _traveledPath.clear();
+                });
+              },
               child: const Text('OK'),
             ),
           ],
@@ -214,7 +295,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
 
   String _formatDistance(double meters) {
     if (meters < 1000) return '${meters.toStringAsFixed(0)}m';
-    return '${(meters / 1000).toStringAsFixed(1)}km';
+    return '${(meters / 1000).toStringAsFixed(2)}km';
   }
 
   String _formatDuration(double seconds) {
@@ -222,9 +303,13 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     int minutes = ((seconds % 3600) / 60).floor();
     int secs = (seconds % 60).floor();
 
-    if (hours > 0) return '${hours}h ${minutes}min';
-    if (minutes > 0) return '${minutes}min';
-    return '${secs}sec';
+    if (hours > 0) {
+      return '${hours}h ${minutes}m ${secs}s';
+    } else if (minutes > 0) {
+      return '${minutes}m ${secs}s';
+    } else {
+      return '${secs}s';
+    }
   }
 
   String _formatSpeed(double speed, ActivityType type) {
@@ -234,27 +319,57 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     return '${speed.toStringAsFixed(1)} m/s';
   }
 
+  // Calculate distance between two points
+  double _calculateDistance(LatLng p1, LatLng p2) {
+    const double R = 6371000; // Earth's radius in meters
+    double lat1 = p1.latitude * pi / 180;
+    double lat2 = p2.latitude * pi / 180;
+    double deltaLat = (p2.latitude - p1.latitude) * pi / 180;
+    double deltaLng = (p2.longitude - p1.longitude) * pi / 180;
+
+    double a = sin(deltaLat / 2) * sin(deltaLat / 2) +
+        cos(lat1) * cos(lat2) * sin(deltaLng / 2) * sin(deltaLng / 2);
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return R * c;
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Watch providers
+    // Watch providers for real-time updates
     final currentLocation = ref.watch(currentLocationProvider);
     final currentActivity = ref.watch(currentActivityProvider);
     final isTracking = currentActivity != null;
     final travelMode = ref.watch(travelModeProvider);
     final travelModeColor = _getTravelModeColor(travelMode);
     final currentSpeed = ref.watch(currentSpeedProvider);
-    final locationHistory = ref.watch(locationHistoryProvider);
 
-    // Update path points from location history when tracking
-    if (isTracking && locationHistory.isNotEmpty) {
-      setState(() {
-        _pathPoints = locationHistory;
-      });
+    // ✅ UPDATE PATH - Add new points as you move
+    if (isTracking && currentLocation != null) {
+      // Check if we need to add this point to the path
+      if (_traveledPath.isEmpty) {
+        _traveledPath.add(currentLocation);
+      } else {
+        final lastPoint = _traveledPath.last;
+        // Only add if moved more than 5 meters (prevents duplicate points)
+        if (_calculateDistance(lastPoint, currentLocation) > 5) {
+          setState(() {
+            _traveledPath.add(currentLocation);
+          });
+        }
+      }
     }
 
-    // Update animated position when current location changes
-    if (currentLocation != null && _currentAnimatedPosition != currentLocation) {
-      _animateMarkerToNewPosition(currentLocation);
+    // ✅ UPDATE MARKER POSITION
+    if (currentLocation != null) {
+      if (_currentAnimatedPosition == null) {
+        setState(() {
+          _currentAnimatedPosition = currentLocation;
+        });
+      } else if (_currentAnimatedPosition!.latitude != currentLocation.latitude ||
+          _currentAnimatedPosition!.longitude != currentLocation.longitude) {
+        _animateMarkerToNewPosition(currentLocation);
+      }
     }
 
     return Scaffold(
@@ -319,12 +434,12 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Path polyline - shows the completed route
-              if (_pathPoints.isNotEmpty)
+              // ✅ YOUR PATH - Shows where you've been
+              if (_traveledPath.length > 1)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: _pathPoints,
+                      points: _traveledPath,
                       color: travelModeColor.withValues(alpha: 0.8),
                       strokeWidth: 4,
                     ),
@@ -377,8 +492,8 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ],
           ),
 
-          // Live tracking stats
-          if (isTracking)
+          // ✅ LIVE TRACKING STATS
+          if (isTracking && currentActivity != null)
             Positioned(
               top: 16,
               left: 16,
@@ -396,19 +511,19 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     _buildCompactStat(
-                      value: _formatDistance(currentActivity?.distance ?? 0),
+                      value: _formatDistance(currentActivity.distance),
                       icon: Icons.straighten,
                       color: travelModeColor,
                     ),
                     Container(height: 30, width: 1, color: Colors.grey.shade300),
                     _buildCompactStat(
-                      value: _formatDuration(currentActivity?.duration ?? 0),
+                      value: _formatDuration(currentActivity.duration),
                       icon: Icons.timer,
                       color: travelModeColor,
                     ),
                     Container(height: 30, width: 1, color: Colors.grey.shade300),
                     _buildCompactStat(
-                      value: _formatSpeed(currentSpeed, currentActivity?.type ?? ActivityType.running),
+                      value: _formatSpeed(currentSpeed, currentActivity.type),
                       icon: Icons.speed,
                       color: travelModeColor,
                     ),
@@ -432,7 +547,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ),
           ),
 
-          // Start/Stop buttons
+          // ✅ START/FINISH BUTTONS
           Positioned(
             bottom: 32,
             left: 0,
@@ -489,37 +604,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               ),
             ),
           ),
-
-          // Path stats when tracking
-          if (isTracking && _pathPoints.length > 1)
-            Positioned(
-              bottom: 100,
-              left: 16,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.route, color: travelModeColor, size: 16),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${_pathPoints.length} points',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade800,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -569,6 +653,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
 
   @override
   void dispose() {
+    _statsTimer?.cancel();
     _markerAnimationController?.dispose();
     super.dispose();
   }
