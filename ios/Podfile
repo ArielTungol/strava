@@ -38,23 +38,13 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
-    # Add location permissions to build settings for all targets
+    # Add location permissions to build settings
     target.build_configurations.each do |config|
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
         'PERMISSION_LOCATION=1',
-        'PERMISSION_LOCATION_ALWAYS=1',
-        'PERMISSION_LOCATION_WHEN_IN_USE=1',
       ]
-
-      # Set minimum deployment target
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-
-      # Set Swift version
-      config.build_settings['SWIFT_VERSION'] = '5.0'
-
-      # Enable modules for better compatibility
-      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
     end
   end
 end
