@@ -32,9 +32,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   // Timer for updating stats
   Timer? _statsTimer;
 
-  // Stream subscription for location updates
-  StreamSubscription<LatLng>? _locationSubscription;
-
   @override
   void initState() {
     super.initState();
@@ -55,13 +52,13 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   }
 
   void _setupLocationListener() {
-    // Listen to location changes directly
-    _locationSubscription = ref.listen(currentLocationProvider, (previous, next) {
+    // Listen to location changes directly - Riverpod manages the subscription
+    ref.listen(currentLocationProvider, (previous, next) {
       if (next != null && mounted) {
-        print('📍 Location changed: ${next.latitude}, ${next.longitude}');
+        debugPrint('📍 Location changed: ${next.latitude}, ${next.longitude}');
         _handleLocationUpdate(next);
       }
-    }).locationSubscription;
+    });
   }
 
   void _handleLocationUpdate(LatLng newLocation) {
@@ -85,7 +82,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
           double distance = _calculateDistance(lastPoint, newLocation);
           if (distance > 2) { // 2 meters threshold for smoother path
             _traveledPath.add(newLocation);
-            print('📍 Path point added: ${_traveledPath.length}');
+            debugPrint('📍 Path point added: ${_traveledPath.length}');
           }
         }
       });
@@ -96,12 +93,14 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     // Check and request permissions
     final permissionGranted = await ref.read(locationPermissionStateProvider.notifier).checkAndRequestPermission();
     if (!permissionGranted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Location permission is required to track activities'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location permission is required to track activities'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       return;
     }
 
@@ -161,7 +160,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ START BUTTON FUNCTION
+  /// START BUTTON FUNCTION
   void _startTracking() {
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
@@ -222,26 +221,27 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ FINISH BUTTON FUNCTION
+  /// FINISH BUTTON FUNCTION
   Future<void> _stopTracking() async {
-    print('🔴 Finish button pressed');
+    debugPrint('🔴 Finish button pressed');
 
     // Stop timer
     _statsTimer?.cancel();
 
+    // Check if mounted before showing dialog
+    if (!mounted) return;
+
     // Show loading indicator
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(child: CircularProgressIndicator()),
-      );
-    }
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
 
     try {
       // Finish activity - this saves to Hive database
       await ref.read(currentActivityProvider.notifier).finishActivity();
-      print('✅ Activity finished and saved to history');
+      debugPrint('✅ Activity finished and saved to history');
 
       // Stop location tracking
       ref.read(locationTrackingProvider.notifier).stopTracking();
@@ -263,7 +263,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         _showActivitySummary();
       }
     } catch (e) {
-      print('❌ Error finishing activity: $e');
+      debugPrint('❌ Error finishing activity: $e');
       if (mounted) {
         Navigator.of(context).pop(); // Close loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
@@ -300,7 +300,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
 
   void _showActivitySummary() {
     final currentActivity = ref.read(currentActivityProvider);
-    if (currentActivity == null) return;
+    if (currentActivity == null || !mounted) return;
 
     showDialog(
       context: context,
@@ -482,7 +482,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // ✅ YOUR PATH - Shows where you've been
+              // YOUR PATH - Shows where you've been
               if (_traveledPath.length > 1)
                 PolylineLayer(
                   polylines: [
@@ -497,7 +497,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               // Markers
               MarkerLayer(
                 markers: [
-                  // ✅ CURRENT POSITION MARKER - Moves with you!
+                  // CURRENT POSITION MARKER - Moves with you!
                   if (_currentAnimatedPosition != null)
                     Marker(
                       point: _currentAnimatedPosition!,
@@ -542,7 +542,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ],
           ),
 
-          // ✅ LIVE TRACKING STATS
+          // LIVE TRACKING STATS
           if (isTracking && currentActivity != null)
             Positioned(
               top: 16,
@@ -597,7 +597,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ),
           ),
 
-          // ✅ START/FINISH BUTTONS
+          // START/FINISH BUTTONS
           Positioned(
             bottom: 32,
             left: 0,
@@ -655,7 +655,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ),
           ),
 
-          // ✅ PATH INFO
+          // PATH INFO
           if (isTracking && _traveledPath.length > 1)
             Positioned(
               bottom: 100,
@@ -720,7 +720,10 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 6,
+          ),
         ],
       ),
       child: IconButton(
@@ -734,7 +737,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
 
   @override
   void dispose() {
-    _locationSubscription?.cancel();
     _statsTimer?.cancel();
     _markerAnimationController?.dispose();
     super.dispose();
