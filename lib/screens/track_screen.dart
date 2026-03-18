@@ -6,6 +6,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/activity_provider.dart';
 import '../providers/location_provider.dart';
@@ -396,8 +397,10 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               initialZoom: 16,
             ),
             children: [
+              // ✅ FIXED: Use CDN tile server with proper user agent
               TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.yourcompany.strava', // Replace with your app's bundle ID
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
@@ -446,6 +449,32 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                   ],
                 ),
             ],
+          ),
+
+          // ✅ OSM Attribution - Added as a separate positioned widget
+          Positioned(
+            bottom: 180,
+            right: 8,
+            child: GestureDetector(
+              onTap: () async {
+                final url = Uri.parse('https://openstreetmap.org/copyright');
+                if (await canLaunchUrl(url)) {
+                  await launchUrl(url);
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: const Text(
+                  '© OpenStreetMap',
+                  style: TextStyle(fontSize: 10, color: Colors.black54),
+                ),
+              ),
+            ),
           ),
 
           // Live stats
