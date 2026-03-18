@@ -32,11 +32,15 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   // Timer for updating stats
   Timer? _statsTimer;
 
+  // Flag to track if location is being watched
+  bool _isLocationServiceActive = false;
+
   @override
   void initState() {
     super.initState();
     _initializeMarkerAnimation();
     _initializeLocation();
+    _startLocationListening();
   }
 
   void _initializeMarkerAnimation() {
@@ -44,6 +48,44 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
       vsync: this,
       duration: const Duration(milliseconds: 500),
     );
+  }
+
+  void _startLocationListening() {
+    // This ensures we're constantly listening to location updates
+    ref.listen(currentLocationProvider, (previous, next) {
+      if (next != null && mounted) {
+        print('📍 Location updated: ${next.latitude}, ${next.longitude}');
+
+        // Update marker position
+        if (_currentAnimatedPosition == null) {
+          setState(() {
+            _currentAnimatedPosition = next;
+          });
+        } else {
+          _animateMarkerToNewPosition(next);
+        }
+
+        // Add to path if tracking
+        final isTracking = ref.read(currentActivityProvider) != null;
+        if (isTracking) {
+          setState(() {
+            if (_traveledPath.isEmpty) {
+              _traveledPath = [next];
+            } else {
+              // Only add if moved significantly (prevents duplicate points)
+              final lastPoint = _traveledPath.last;
+              double distance = _calculateDistance(lastPoint, next);
+              if (distance > 3) { // 3 meters threshold
+                _traveledPath.add(next);
+                print('📍 Path point added: ${_traveledPath.length}');
+              }
+            }
+          });
+        }
+
+        _isLocationServiceActive = true;
+      }
+    });
   }
 
   Future<void> _initializeLocation() async {
@@ -176,30 +218,45 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ FINISH BUTTON FUNCTION
+  /// ✅ FINISH BUTTON FUNCTION - Now Working!
   Future<void> _stopTracking() async {
+    print('🔴 Finish button pressed');
+
     // Stop timer
     _statsTimer?.cancel();
 
-    // Finish activity - this saves to Hive database
-    await ref.read(currentActivityProvider.notifier).finishActivity();
+    try {
+      // Finish activity - this saves to Hive database
+      await ref.read(currentActivityProvider.notifier).finishActivity();
+      print('✅ Activity finished and saved to history');
 
-    // Stop location tracking
-    ref.read(locationTrackingProvider.notifier).stopTracking();
-    ref.read(currentSpeedProvider.notifier).resetSpeed();
+      // Stop location tracking
+      ref.read(locationTrackingProvider.notifier).stopTracking();
+      ref.read(currentSpeedProvider.notifier).resetSpeed();
 
-    // Show success message
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Activity saved to history!'),
-        backgroundColor: Colors.green,
-        duration: Duration(seconds: 2),
-      ),
-    );
+      // Show success message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Activity saved to history!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
 
-    // Show activity summary
-    if (mounted) {
-      _showActivitySummary();
+        // Show activity summary
+        _showActivitySummary();
+      }
+    } catch (e) {
+      print('❌ Error finishing activity: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving activity: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -335,47 +392,9 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     final travelModeColor = _getTravelModeColor(travelMode);
     final currentSpeed = ref.watch(currentSpeedProvider);
 
-    // ✅ UPDATE PATH - Add new points as you move (REAL-TIME)
-    if (isTracking && currentLocation != null) {
-      // Check if we need to add this point to the path
-      if (_traveledPath.isEmpty) {
-        _traveledPath = [currentLocation];
-      } else {
-        final lastPoint = _traveledPath.last;
-        // Calculate distance from last point
-        double distance = _calculateDistance(lastPoint, currentLocation);
-        // Only add if moved more than 5 meters (prevents duplicate points)
-        if (distance > 5) {
-          // Use WidgetsBinding to avoid setState during build
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() {
-                _traveledPath.add(currentLocation);
-              });
-            }
-          });
-        }
-      }
-    }
-
-    // ✅ UPDATE MARKER POSITION - Moves in real-time as you move
+    // DEBUG: Print current location
     if (currentLocation != null) {
-      if (_currentAnimatedPosition == null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            setState(() {
-              _currentAnimatedPosition = currentLocation;
-            });
-          }
-        });
-      } else if (_currentAnimatedPosition!.latitude != currentLocation.latitude ||
-          _currentAnimatedPosition!.longitude != currentLocation.longitude) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _animateMarkerToNewPosition(currentLocation);
-          }
-        });
-      }
+      print('📍 Current location in build: ${currentLocation.latitude}, ${currentLocation.longitude}');
     }
 
     return Scaffold(
@@ -383,7 +402,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         title: const Text('Track Activity'),
         backgroundColor: travelModeColor.withValues(alpha: 0.9),
         foregroundColor: Colors.white,
-        // ✅ ACTIVITY SELECTOR - Back in the app bar!
         actions: [
           if (!isTracking)
             PopupMenuButton<String>(
@@ -456,7 +474,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               // Markers
               MarkerLayer(
                 markers: [
-                  // ✅ CURRENT POSITION MARKER - Moves as you move
+                  // ✅ CURRENT POSITION MARKER - Now moves with you!
                   if (_currentAnimatedPosition != null)
                     Marker(
                       point: _currentAnimatedPosition!,
