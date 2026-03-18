@@ -27,13 +27,11 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
   // Simple marker position
   LatLng? _currentMarkerPosition;
 
-  // For tracking polyline
+  // For tracking polyline - now records EVERY point
   final List<LatLng> _recordedRoutePoints = [];
 
   // For stats display
   Timer? _statsUpdateTimer;
-  LatLng? _lastRecordedPoint;
-  double _minDistanceBetweenPoints = 5.0; // Minimum 5 meters between recorded points
 
   @override
   void initState() {
@@ -73,30 +71,17 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
   }
 
   void _addRoutePointForPolyline(LatLng point) {
-    // Only add point if it's far enough from the last recorded point
-    if (_lastRecordedPoint == null) {
-      _recordedRoutePoints.add(point);
-      _lastRecordedPoint = point;
-      return;
+    // Add EVERY point to the polyline, no filtering
+    _recordedRoutePoints.add(point);
+
+    // Limit the number of points to prevent performance issues
+    // But with higher limit since we're recording every point
+    if (_recordedRoutePoints.length > 5000) {
+      _recordedRoutePoints.removeAt(0);
     }
 
-    // Simple distance check
-    double distance = sqrt(
-        pow(point.latitude - _lastRecordedPoint!.latitude, 2) +
-            pow(point.longitude - _lastRecordedPoint!.longitude, 2)
-    ) * 111000; // Rough conversion to meters
-
-    if (distance >= _minDistanceBetweenPoints) {
-      _recordedRoutePoints.add(point);
-      _lastRecordedPoint = point;
-
-      // Limit the number of points
-      if (_recordedRoutePoints.length > 1000) {
-        _recordedRoutePoints.removeAt(0);
-      }
-
-      setState(() {});
-    }
+    // Refresh the map to show the new polyline point
+    setState(() {});
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
@@ -144,7 +129,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
 
     // Clear previous route points
     _recordedRoutePoints.clear();
-    _lastRecordedPoint = null;
 
     ref.read(currentActivityProvider.notifier).startNewActivity(
       '${travelMode.capitalize()} ${_formatTimeForName(DateTime.now())}',
@@ -224,7 +208,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
     // Clear recorded route points
     setState(() {
       _recordedRoutePoints.clear();
-      _lastRecordedPoint = null;
       _currentMarkerPosition = ref.read(currentLocationProvider);
     });
 
@@ -273,7 +256,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
                 Navigator.of(context).pop();
                 setState(() {
                   _recordedRoutePoints.clear();
-                  _lastRecordedPoint = null;
                 });
               },
               child: const Text('OK'),
@@ -325,7 +307,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
       _currentMarkerPosition = currentLocation;
     }
 
-    // Add route point for polyline when tracking
+    // Add route point for polyline when tracking - EVERY movement now!
     if (isTracking && currentLocation != null) {
       _addRoutePointForPolyline(currentLocation);
     }
@@ -451,7 +433,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
                   ],
                 ),
 
-              // Recorded activity polyline
+              // Recorded activity polyline - this will show EVERY movement
               if (displayPolylinePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
