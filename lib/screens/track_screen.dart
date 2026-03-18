@@ -32,15 +32,15 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   // Timer for updating stats
   Timer? _statsTimer;
 
-  // Flag to track if location is being watched
-  bool _isLocationServiceActive = false;
-
   @override
   void initState() {
     super.initState();
     _initializeMarkerAnimation();
-    _initializeLocation();
-    _startLocationListening();
+
+    // Use WidgetsBinding to ensure the widget is built before initializing location
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeLocation();
+    });
   }
 
   void _initializeMarkerAnimation() {
@@ -48,44 +48,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
       vsync: this,
       duration: const Duration(milliseconds: 500),
     );
-  }
-
-  void _startLocationListening() {
-    // This ensures we're constantly listening to location updates
-    ref.listen(currentLocationProvider, (previous, next) {
-      if (next != null && mounted) {
-        print('📍 Location updated: ${next.latitude}, ${next.longitude}');
-
-        // Update marker position
-        if (_currentAnimatedPosition == null) {
-          setState(() {
-            _currentAnimatedPosition = next;
-          });
-        } else {
-          _animateMarkerToNewPosition(next);
-        }
-
-        // Add to path if tracking
-        final isTracking = ref.read(currentActivityProvider) != null;
-        if (isTracking) {
-          setState(() {
-            if (_traveledPath.isEmpty) {
-              _traveledPath = [next];
-            } else {
-              // Only add if moved significantly (prevents duplicate points)
-              final lastPoint = _traveledPath.last;
-              double distance = _calculateDistance(lastPoint, next);
-              if (distance > 3) { // 3 meters threshold
-                _traveledPath.add(next);
-                print('📍 Path point added: ${_traveledPath.length}');
-              }
-            }
-          });
-        }
-
-        _isLocationServiceActive = true;
-      }
-    });
   }
 
   Future<void> _initializeLocation() async {
@@ -105,7 +67,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     final service = ref.read(locationServiceProvider);
     final location = await service.getCurrentLocation();
 
-    if (location != null) {
+    if (location != null && mounted) {
       ref.read(currentLocationProvider.notifier).updateLocation(location);
       setState(() {
         _currentAnimatedPosition = location;
@@ -218,12 +180,19 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ FINISH BUTTON FUNCTION - Now Working!
+  /// ✅ FINISH BUTTON FUNCTION - Fixed!
   Future<void> _stopTracking() async {
     print('🔴 Finish button pressed');
 
     // Stop timer
     _statsTimer?.cancel();
+
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
 
     try {
       // Finish activity - this saves to Hive database
@@ -234,8 +203,11 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
       ref.read(locationTrackingProvider.notifier).stopTracking();
       ref.read(currentSpeedProvider.notifier).resetSpeed();
 
-      // Show success message
+      // Close loading dialog
       if (mounted) {
+        Navigator.of(context).pop();
+
+        // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('✅ Activity saved to history!'),
@@ -250,6 +222,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     } catch (e) {
       print('❌ Error finishing activity: $e');
       if (mounted) {
+        Navigator.of(context).pop(); // Close loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error saving activity: $e'),
@@ -392,9 +365,45 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     final travelModeColor = _getTravelModeColor(travelMode);
     final currentSpeed = ref.watch(currentSpeedProvider);
 
-    // DEBUG: Print current location
+    // ✅ FIXED: Update path and marker when location changes
     if (currentLocation != null) {
-      print('📍 Current location in build: ${currentLocation.latitude}, ${currentLocation.longitude}');
+      // Update marker position immediately
+      if (_currentAnimatedPosition == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _currentAnimatedPosition = currentLocation;
+            });
+          }
+        });
+      } else if (_currentAnimatedPosition!.latitude != currentLocation.latitude ||
+          _currentAnimatedPosition!.longitude != currentLocation.longitude) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _animateMarkerToNewPosition(currentLocation);
+          }
+        });
+      }
+
+      // Add to path if tracking
+      if (isTracking) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              if (_traveledPath.isEmpty) {
+                _traveledPath = [currentLocation];
+              } else {
+                final lastPoint = _traveledPath.last;
+                double distance = _calculateDistance(lastPoint, currentLocation);
+                if (distance > 3) { // 3 meters threshold
+                  _traveledPath.add(currentLocation);
+                  print('📍 Path point added: ${_traveledPath.length}');
+                }
+              }
+            });
+          }
+        });
+      }
     }
 
     return Scaffold(
