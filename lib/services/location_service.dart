@@ -11,7 +11,15 @@ class LocationService {
   Position? _currentPosition;
   bool _isTracking = false;
 
+  // For accuracy filtering
+  double _lastAccuracy = 0;
+  static const double minAccuracy = 20.0; // Minimum acceptable accuracy in meters
+  static const double minDistanceDelta = 5.0; // Minimum distance change to record point
+
   Position? get currentPosition => _currentPosition;
+  LatLng? get currentLatLng => _currentPosition != null
+      ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
+      : null;
 
   Future<bool> checkAndRequestPermission() async {
     bool serviceEnabled;
@@ -44,6 +52,7 @@ class LocationService {
     try {
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 10),
       );
 
       _currentPosition = position;
@@ -56,25 +65,58 @@ class LocationService {
   void startTracking({
     required Function(LatLng) onPositionChanged,
     Function(double)? onSpeedChanged,
+    Function(double)? onDistanceChanged,
   }) async {
-    bool hasPermission = await checkAndRequestPermission();
-    if (!hasPermission) return;
-
     _positionStream?.cancel();
 
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 2, // Update every 2 meters
+      distanceFilter: 0, // We'll filter manually for better control
+      timeLimit: Duration(seconds: 10),
     );
 
     _isTracking = true;
+    _lastAccuracy = 0;
 
     _positionStream = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen((Position position) {
+      // Filter by accuracy
+      if (position.accuracy > minAccuracy) {
+        return; // Skip inaccurate points
+      }
+
+      // Filter by minimum distance if we have a previous position
+      if (_currentPosition != null) {
+        double distance = Geolocator.distanceBetween(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+          position.latitude,
+          position.longitude,
+        );
+
+        if (distance < minDistanceDelta) {
+          return; // Skip if not moved enough
+        }
+      }
+
       _currentPosition = position;
+      _lastAccuracy = position.accuracy;
+
       onPositionChanged(LatLng(position.latitude, position.longitude));
       onSpeedChanged?.call(position.speed);
+
+      // Calculate and report distance since last point
+      if (_currentPosition != null) {
+        double distance = Geolocator.distanceBetween(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+          position.latitude,
+          position.longitude,
+        );
+        onDistanceChanged?.call(distance);
+      }
+
     }, onError: (error) {
       _isTracking = false;
     });
@@ -96,4 +138,8 @@ class LocationService {
   }
 
   bool get isTracking => _isTracking;
+
+  void dispose() {
+    stopTracking();
+  }
 }

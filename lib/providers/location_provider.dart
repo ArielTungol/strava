@@ -63,12 +63,15 @@ class LocationTracking extends _$LocationTracking {
 
     service.startTracking(
       onPositionChanged: (position) {
+        // Update current location
         ref.read(currentLocationProvider.notifier).updateLocation(position);
 
+        // Add route point for activity if tracking
         final currentActivity = ref.read(currentActivityProvider);
         if (currentActivity != null) {
           final speed = service.currentPosition?.speed ?? 0;
-          ref.read(activityServiceProvider).addRoutePoint(position, speed, 0);
+          final altitude = service.currentPosition?.altitude ?? 0;
+          ref.read(activityServiceProvider).addRoutePoint(position, speed, altitude);
           ref.read(currentActivityProvider.notifier).updateActivity();
         }
       },

@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Cupertino icons for iOS style
   cupertino_icons: ^1.0.8
 
   # Riverpod for state management
@@ -23,9 +24,6 @@ dependencies:
 
   # Location
   geolocator: ^14.0.2
-
-  # Networking
-  http: ^1.3.0
 
   # Local Database
   hive: ^2.2.3
@@ -52,18 +50,22 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   timezone: ^0.10.0
 
-
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+  # Code generation
   build_runner: ^2.4.13
   hive_generator: ^2.0.1
   riverpod_generator: ^2.4.0
+
+  # Linting
   flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
+
+  # Assets
   assets:
     - assets/images/
     - assets/icons/

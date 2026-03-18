@@ -46,27 +46,42 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- Location Permission Descriptions -->
+	<!-- ========== LOCATION PERMISSIONS ========== -->
+	<!-- Required for GPS tracking -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Strava needs access to your location to track your runs, walks, and cycling routes in real-time on the map</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Strava needs access to your location to track your activities even when the app is in the background, so you can record your workouts without keeping the app open</string>
-	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Strava needs access to your location to continuously track your runs, walks, and cycling activities</string>
+	<string>Strava needs your location to track your runs, walks, and cycling routes in real-time</string>
 
-	<!-- Background Modes -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Strava needs your location to track activities even when the app is in the background</string>
+
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Strava needs your location to continuously track your activities</string>
+
+	<!-- ========== BACKGROUND MODES ========== -->
+	<!-- Allows tracking when app is in background -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
 		<string>fetch</string>
 	</array>
 
-	<!-- Motion Data -->
+	<!-- ========== NOTIFICATIONS ========== -->
+	<!-- For safety alerts and activity reminders -->
+	<key>NSUserNotificationUsageDescription</key>
+	<string>Strava sends notifications for safety alerts and activity reminders</string>
+
+	<!-- ========== MOTION DATA ========== -->
+	<!-- Optional for step counting -->
 	<key>NSMotionUsageDescription</key>
 	<string>Strava uses motion data to enhance activity tracking accuracy</string>
 
-	<!-- Notifications -->
-	<key>NSUserNotificationUsageDescription</key>
-	<string>Strava sends notifications for activity reminders and safety alerts</string>
+	<!-- ========== URL SCHEMES ========== -->
+	<!-- For SMS and phone calls in safety features -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>sms</string>
+		<string>tel</string>
+		<string>mailto</string>
+	</array>
 </dict>
 </plist>

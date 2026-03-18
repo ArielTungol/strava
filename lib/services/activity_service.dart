@@ -16,6 +16,7 @@ class ActivityService {
 
   Activity? _currentActivity;
   LatLng? _lastPosition;
+  DateTime? _lastTimestamp;
   double _totalDistance = 0;
   double _maxSpeed = 0;
   double _elevationGain = 0;
@@ -23,11 +24,15 @@ class ActivityService {
   double _currentHeartRate = 0;
   List<double> _heartRateReadings = [];
 
+  // For smoothing speed
+  final List<double> _speedBuffer = [];
+  static const int speedBufferSize = 5;
+
   // Splits
   List<Map<String, dynamic>> _splits = [];
   double _lastSplitDistance = 0;
   int _currentSplitIndex = 0;
-  static const double splitDistance = 1000;
+  static const double splitDistance = 1000; // 1km splits
 
   Activity? get currentActivity => _currentActivity;
   double get currentDistance => _totalDistance;
@@ -56,20 +61,59 @@ class ActivityService {
     _elevationGain = 0;
     _lastElevation = 0;
     _lastPosition = null;
+    _lastTimestamp = null;
     _heartRateReadings = [];
     _splits = [];
     _lastSplitDistance = 0;
     _currentSplitIndex = 0;
+    _speedBuffer.clear();
   }
 
   void addRoutePoint(LatLng position, double speed, double altitude, {double? heartRate}) {
     if (_currentActivity == null) return;
 
+    final now = DateTime.now();
+
+    // Calculate time delta for speed validation
+    if (_lastTimestamp != null) {
+      final timeDelta = now.difference(_lastTimestamp!).inSeconds;
+      if (timeDelta > 0) {
+        // Calculate speed from position change for validation
+        if (_lastPosition != null) {
+          final distanceFromLast = geolocator.Geolocator.distanceBetween(
+            _lastPosition!.latitude,
+            _lastPosition!.longitude,
+            position.latitude,
+            position.longitude,
+          );
+
+          final calculatedSpeed = distanceFromLast / timeDelta;
+
+          // Use the higher of reported speed and calculated speed
+          // but cap unrealistic speeds (> 20 m/s for running, > 30 m/s for cycling)
+          double maxAllowedSpeed = 30.0; // m/s (108 km/h)
+          if (_currentActivity!.type == ActivityType.running ||
+              _currentActivity!.type == ActivityType.walking) {
+            maxAllowedSpeed = 10.0; // 36 km/h max for running/walking
+          }
+
+          speed = min(max(calculatedSpeed, speed), maxAllowedSpeed);
+        }
+      }
+    }
+
+    // Smooth speed with moving average
+    _speedBuffer.add(speed);
+    if (_speedBuffer.length > speedBufferSize) {
+      _speedBuffer.removeAt(0);
+    }
+    final smoothedSpeed = _speedBuffer.reduce((a, b) => a + b) / _speedBuffer.length;
+
     final point = RoutePoint(
       latitude: position.latitude,
       longitude: position.longitude,
-      timestamp: DateTime.now(),
-      speed: speed,
+      timestamp: now,
+      speed: smoothedSpeed,
       altitude: altitude,
       heartRate: heartRate ?? _currentHeartRate,
     );
@@ -80,7 +124,7 @@ class ActivityService {
       routePoints: updatedRoutePoints,
     );
 
-    if (_lastPosition != null) {
+    if (_lastPosition != null && _lastTimestamp != null) {
       double distance = geolocator.Geolocator.distanceBetween(
         _lastPosition!.latitude,
         _lastPosition!.longitude,
@@ -88,25 +132,30 @@ class ActivityService {
         position.longitude,
       );
 
-      _totalDistance += distance;
-      _currentActivity = _currentActivity!.copyWith(
-        distance: _totalDistance,
-      );
-
-      _updateSplits(distance);
-
-      if (speed > _maxSpeed) {
-        _maxSpeed = speed;
+      // Validate distance (can't be negative or extremely large)
+      if (distance > 0 && distance < 500) { // Max 500m between points (unrealistic but safe)
+        _totalDistance += distance;
         _currentActivity = _currentActivity!.copyWith(
-          maxSpeed: _maxSpeed,
+          distance: _totalDistance,
         );
-      }
 
-      if (_lastElevation != 0 && altitude > _lastElevation) {
-        _elevationGain += (altitude - _lastElevation);
-        _currentActivity = _currentActivity!.copyWith(
-          elevationGain: _elevationGain,
-        );
+        _updateSplits(distance);
+
+        // Update max speed
+        if (smoothedSpeed > _maxSpeed) {
+          _maxSpeed = smoothedSpeed;
+          _currentActivity = _currentActivity!.copyWith(
+            maxSpeed: _maxSpeed,
+          );
+        }
+
+        // Update elevation gain
+        if (_lastElevation != 0 && altitude > _lastElevation) {
+          _elevationGain += (altitude - _lastElevation);
+          _currentActivity = _currentActivity!.copyWith(
+            elevationGain: _elevationGain,
+          );
+        }
       }
     }
 
@@ -128,6 +177,7 @@ class ActivityService {
     }
 
     _lastPosition = position;
+    _lastTimestamp = now;
     _lastElevation = altitude;
 
     _updateActivityStats();
@@ -136,7 +186,7 @@ class ActivityService {
   void _updateSplits(double distance) {
     _lastSplitDistance += distance;
 
-    if (_lastSplitDistance >= splitDistance) {
+    while (_lastSplitDistance >= splitDistance) {
       final splitTime = DateTime.now().difference(
           _splits.isEmpty
               ? _currentActivity!.startTime
@@ -154,7 +204,7 @@ class ActivityService {
         'endTime': DateTime.now().toIso8601String(),
       });
 
-      _lastSplitDistance = _lastSplitDistance - splitDistance;
+      _lastSplitDistance -= splitDistance;
     }
   }
 
@@ -204,7 +254,7 @@ class ActivityService {
         break;
     }
 
-    const double weight = 70.0;
+    const double weight = 70.0; // Default weight in kg
     final double durationHours = _currentActivity!.duration / 3600;
 
     return (met * weight * durationHours).round();
@@ -213,12 +263,7 @@ class ActivityService {
   Future<void> finishActivity() async {
     if (_currentActivity == null) return;
 
-    _currentActivity = _currentActivity!.copyWith(
-      endTime: DateTime.now(),
-    );
-
-    _updateActivityStats();
-
+    // Add final split if there's remaining distance
     if (_lastSplitDistance > 100) {
       _splits.add({
         'index': _currentSplitIndex++,
@@ -242,12 +287,18 @@ class ActivityService {
       });
     }
 
-    await _activityBox.put(_currentActivity!.id, _currentActivity!);
+    _currentActivity = _currentActivity!.copyWith(
+      endTime: DateTime.now(),
+    );
 
+    _updateActivityStats();
+
+    await _activityBox.put(_currentActivity!.id, _currentActivity!);
     await _updateUserStats();
 
     _currentActivity = null;
     _lastPosition = null;
+    _lastTimestamp = null;
   }
 
   Future<void> _updateUserStats() async {
