@@ -27,11 +27,12 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
   // Simple marker position
   LatLng? _currentMarkerPosition;
 
-  // For tracking polyline - now records EVERY point
+  // For tracking polyline
   final List<LatLng> _recordedRoutePoints = [];
 
   // For stats display
   Timer? _statsUpdateTimer;
+  LatLng? _lastRecordedPoint;
 
   @override
   void initState() {
@@ -54,6 +55,8 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
   }
 
   Future<void> _initializeLocation() async {
+    print('📍 Initializing location...');
+
     // Request permission and get initial location
     await ref.read(locationPermissionStateProvider.notifier).checkAndRequestPermission();
 
@@ -67,20 +70,21 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
         _currentMarkerPosition = location;
       });
       _mapController.move(location, 16);
+      print('📍 Location obtained: $location');
+    } else {
+      print('❌ Could not get location');
     }
   }
 
   void _addRoutePointForPolyline(LatLng point) {
-    // Add EVERY point to the polyline, no filtering
+    // Add EVERY point to the polyline
     _recordedRoutePoints.add(point);
 
     // Limit the number of points to prevent performance issues
-    // But with higher limit since we're recording every point
     if (_recordedRoutePoints.length > 5000) {
       _recordedRoutePoints.removeAt(0);
     }
 
-    // Refresh the map to show the new polyline point
     setState(() {});
   }
 
@@ -124,19 +128,48 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
   }
 
   void _startTracking() {
+    print('\n========== START BUTTON PRESSED ==========');
+
+    // Check if we have location
+    final currentLocation = ref.read(currentLocationProvider);
+    if (currentLocation == null) {
+      print('❌ Cannot start: No GPS location available');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Waiting for GPS location...'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Get travel mode
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
 
+    print('✅ Starting activity with:');
+    print('  - Mode: $travelMode');
+    print('  - Type: $activityType');
+    print('  - Location: $currentLocation');
+
     // Clear previous route points
     _recordedRoutePoints.clear();
+    _lastRecordedPoint = null;
 
+    // Add starting point
+    _addRoutePointForPolyline(currentLocation);
+
+    // Start the activity in the provider
     ref.read(currentActivityProvider.notifier).startNewActivity(
       '${travelMode.capitalize()} ${_formatTimeForName(DateTime.now())}',
       activityType,
     );
 
+    // Start location tracking
     ref.read(locationTrackingProvider.notifier).startTracking();
 
+    // Show success message
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Tracking started!'),
@@ -144,6 +177,9 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
         backgroundColor: Colors.green,
       ),
     );
+
+    print('✅ Start button completed successfully');
+    print('========== START BUTTON COMPLETE ==========\n');
   }
 
   String _formatTimeForName(DateTime time) {
@@ -169,36 +205,43 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
   }
 
   Future<void> _stopTracking() async {
-    try {
-      print('Stopping tracking...');
+    print('\n========== FINISH BUTTON PRESSED ==========');
 
-      // Stop location tracking first
+    try {
+      // First stop location tracking
+      print('🛑 Stopping location tracking...');
       ref.read(locationTrackingProvider.notifier).stopTracking();
 
-      // Then finish the activity
+      // Then finish the activity (this saves to history)
+      print('💾 Finishing activity and saving to history...');
       await ref.read(currentActivityProvider.notifier).finishActivity();
 
       // Reset speed
       ref.read(currentSpeedProvider.notifier).resetSpeed();
 
-      print('Tracking stopped successfully');
+      print('✅ Activity finished successfully');
 
-      // Show summary if mounted
+      // Show summary
       if (mounted) {
         _showActivitySummary();
       }
+
     } catch (e) {
-      print('Error stopping tracking: $e');
+      print('❌ Error in _stopTracking: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error finishing activity: $e'),
+          content: Text('Error: $e'),
           backgroundColor: Colors.red,
         ),
       );
     }
+
+    print('========== FINISH BUTTON COMPLETE ==========\n');
   }
 
   void _cancelTracking() {
+    print('\n========== CANCEL BUTTON PRESSED ==========');
+
     ref.read(currentActivityProvider.notifier).cancelActivity();
     ref.read(locationTrackingProvider.notifier).stopTracking();
     ref.read(currentSpeedProvider.notifier).resetSpeed();
@@ -208,6 +251,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
     // Clear recorded route points
     setState(() {
       _recordedRoutePoints.clear();
+      _lastRecordedPoint = null;
       _currentMarkerPosition = ref.read(currentLocationProvider);
     });
 
@@ -218,11 +262,17 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
         backgroundColor: Colors.orange,
       ),
     );
+
+    print('✅ Tracking cancelled');
+    print('========== CANCEL BUTTON COMPLETE ==========\n');
   }
 
   void _showActivitySummary() {
     final currentActivity = ref.read(currentActivityProvider);
-    if (currentActivity == null) return;
+    if (currentActivity == null) {
+      print('⚠️ No activity to show summary for');
+      return;
+    }
 
     showDialog(
       context: context,
@@ -240,13 +290,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
                 const Divider(),
                 _buildSummaryRow('Avg Speed', _formatSpeed(currentActivity.averageSpeed, currentActivity.type)),
                 const Divider(),
-                _buildSummaryRow('Max Speed', _formatSpeed(currentActivity.maxSpeed ?? 0, currentActivity.type)),
-                const Divider(),
                 _buildSummaryRow('Calories', '${currentActivity.caloriesBurned} kcal'),
-                if (currentActivity.elevationGain != null) ...[
-                  const Divider(),
-                  _buildSummaryRow('Elevation Gain', '${currentActivity.elevationGain!.toStringAsFixed(0)}m'),
-                ],
               ],
             ),
           ),
@@ -256,7 +300,16 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
                 Navigator.of(context).pop();
                 setState(() {
                   _recordedRoutePoints.clear();
+                  _lastRecordedPoint = null;
                 });
+                // Navigate to history tab to show saved activity
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Activity saved to history!'),
+                    duration: Duration(seconds: 2),
+                    backgroundColor: Colors.green,
+                  ),
+                );
               },
               child: const Text('OK'),
             ),
@@ -303,11 +356,10 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
 
     // Update marker position when current location changes
     if (currentLocation != null) {
-      // Simple direct update - marker will move immediately
       _currentMarkerPosition = currentLocation;
     }
 
-    // Add route point for polyline when tracking - EVERY movement now!
+    // Add route point for polyline when tracking
     if (isTracking && currentLocation != null) {
       _addRoutePointForPolyline(currentLocation);
     }
@@ -433,7 +485,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
                   ],
                 ),
 
-              // Recorded activity polyline - this will show EVERY movement
+              // Recorded activity polyline
               if (displayPolylinePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -639,12 +691,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
                         _buildMiniStat(
                           label: 'Calories',
                           value: '${currentActivity?.caloriesBurned ?? 0}',
-                          color: travelModeColor,
-                        ),
-                        Container(height: 20, width: 1, color: Colors.grey.shade300),
-                        _buildMiniStat(
-                          label: 'Max Speed',
-                          value: _formatSpeed(currentActivity?.maxSpeed ?? 0, currentActivity?.type ?? ActivityType.running),
                           color: travelModeColor,
                         ),
                       ],
