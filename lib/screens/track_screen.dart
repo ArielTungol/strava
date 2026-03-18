@@ -160,7 +160,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// START BUTTON FUNCTION
+  /// ✅ START BUTTON FUNCTION - Begins tracking
   void _startTracking() {
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
@@ -221,7 +221,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// FINISH BUTTON FUNCTION
+  /// ✅ FINISH BUTTON FUNCTION - Saves to history
   Future<void> _stopTracking() async {
     debugPrint('🔴 Finish button pressed');
 
@@ -482,7 +482,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // YOUR PATH - Shows where you've been
+              // ✅ YOUR PATH POLYLINE - Shows where you've been
               if (_traveledPath.length > 1)
                 PolylineLayer(
                   polylines: [
@@ -497,7 +497,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               // Markers
               MarkerLayer(
                 markers: [
-                  // CURRENT POSITION MARKER - Moves with you!
+                  // ✅ CURRENT POSITION MARKER - Moves with you!
                   if (_currentAnimatedPosition != null)
                     Marker(
                       point: _currentAnimatedPosition!,
@@ -655,7 +655,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ),
           ),
 
-          // PATH INFO
+          // PATH INFO - Shows how many points in your path
           if (isTracking && _traveledPath.length > 1)
             Positioned(
               bottom: 100,
