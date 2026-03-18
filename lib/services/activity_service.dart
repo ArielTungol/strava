@@ -11,8 +11,8 @@ class ActivityService {
   factory ActivityService() => _instance;
   ActivityService._internal();
 
-  final Box<Activity> _activityBox = Hive.box<Activity>('activities');
-  final Box<User> _userBox = Hive.box<User>('user');
+  late final Box<Activity> _activityBox;
+  late final Box<User> _userBox;
 
   Activity? _currentActivity;
   LatLng? _lastPosition;
@@ -37,6 +37,18 @@ class ActivityService {
   // For distance accuracy
   static const double minDistanceDelta = 5.0; // Minimum 5 meters between recorded points
 
+  // Initialize boxes
+  void _initBoxes() {
+    try {
+      _activityBox = Hive.box<Activity>('activities');
+      _userBox = Hive.box<User>('user');
+      print('✅ ActivityService: Boxes initialized');
+    } catch (e) {
+      print('❌ ActivityService: Error initializing boxes: $e');
+      rethrow;
+    }
+  }
+
   Activity? get currentActivity => _currentActivity;
   double get currentDistance => _totalDistance;
   double get currentMaxSpeed => _maxSpeed;
@@ -44,6 +56,13 @@ class ActivityService {
   List<Map<String, dynamic>> get splits => _splits;
 
   void startNewActivity(String name, ActivityType type) {
+    print('========== START NEW ACTIVITY ==========');
+    print('📱 ActivityService: Starting new activity');
+    print('  - Name: $name');
+    print('  - Type: $type');
+
+    _initBoxes();
+
     _currentActivity = Activity(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
@@ -56,7 +75,8 @@ class ActivityService {
     );
 
     _resetMetrics();
-    print('✅ Activity started: $name, type: $type');
+    print('✅ Activity started with ID: ${_currentActivity!.id}');
+    print('========================================');
   }
 
   void _resetMetrics() {
@@ -304,15 +324,26 @@ class ActivityService {
   }
 
   Future<void> finishActivity() async {
+    print('\n========== FINISH ACTIVITY START ==========');
+    print('📱 ActivityService: finishActivity() called');
+
     if (_currentActivity == null) {
-      print('❌ No current activity to finish');
+      print('❌ ERROR: No current activity to finish');
+      print('========== FINISH ACTIVITY END ==========\n');
       return;
     }
 
-    print('✅ Finishing activity...');
+    print('✅ Current activity exists:');
+    print('  - ID: ${_currentActivity!.id}');
+    print('  - Name: ${_currentActivity!.name}');
+    print('  - Type: ${_currentActivity!.type}');
+    print('  - Distance: ${_currentActivity!.distance} meters');
+    print('  - Duration: ${_currentActivity!.duration} seconds');
+    print('  - Route points: ${_currentActivity!.routePoints.length}');
 
     // Add final split if there's remaining distance
     if (_lastSplitDistance > 100) {
+      print('✅ Adding final split: ${_lastSplitDistance.toStringAsFixed(1)} meters');
       _splits.add({
         'index': _currentSplitIndex++,
         'distance': _lastSplitDistance,
@@ -342,14 +373,60 @@ class ActivityService {
       endTime: DateTime.now(),
     );
 
-    print('✅ Saving activity: ${_currentActivity!.id}');
-    print('✅ Distance: ${_currentActivity!.distance}, Duration: ${_currentActivity!.duration}');
-    print('✅ Activity type: ${_currentActivity!.type}');
+    print('✅ Final activity stats:');
+    print('  - Final distance: ${_currentActivity!.distance.toStringAsFixed(1)} meters');
+    print('  - Final duration: ${_currentActivity!.duration.toStringAsFixed(0)} seconds');
+    print('  - Final endTime: ${_currentActivity!.endTime}');
+    print('  - Final calories: ${_currentActivity!.caloriesBurned}');
 
     try {
+      // Initialize boxes if needed
+      _initBoxes();
+
+      // Check if Hive box is open
+      print('✅ Hive box "activities" is open: ${Hive.isBoxOpen("activities")}');
+      print('✅ Activity box length BEFORE save: ${_activityBox.length}');
+
+      // List all existing activities before save
+      if (_activityBox.isNotEmpty) {
+        print('📋 Existing activities in box:');
+        for (var i = 0; i < _activityBox.length; i++) {
+          final existing = _activityBox.getAt(i);
+          if (existing != null) {
+            print('  - [${i}] ${existing.name} (${existing.id})');
+          }
+        }
+      } else {
+        print('📋 No existing activities in box');
+      }
+
       // Save to Hive
+      print('💾 Attempting to save to Hive with ID: ${_currentActivity!.id}');
       await _activityBox.put(_currentActivity!.id, _currentActivity!);
       print('✅ Activity saved successfully to Hive');
+
+      // Verify it was saved
+      final savedActivity = _activityBox.get(_currentActivity!.id);
+      if (savedActivity != null) {
+        print('✅ VERIFICATION: Activity found in Hive after save');
+        print('  - Saved ID: ${savedActivity.id}');
+        print('  - Saved name: ${savedActivity.name}');
+        print('  - Saved distance: ${savedActivity.distance}');
+        print('  - Saved type: ${savedActivity.type}');
+      } else {
+        print('❌ ERROR VERIFICATION: Activity NOT found in Hive after save!');
+      }
+
+      print('✅ Activity box length AFTER save: ${_activityBox.length}');
+
+      // List all activities after save
+      print('📋 All activities in box after save:');
+      for (var i = 0; i < _activityBox.length; i++) {
+        final activity = _activityBox.getAt(i);
+        if (activity != null) {
+          print('  - [${i}] ${activity.name} (${activity.id}) - ${activity.distance}m');
+        }
+      }
 
       // Update user stats
       await _updateUserStats();
@@ -358,15 +435,23 @@ class ActivityService {
       _currentActivity = null;
       _resetMetrics();
 
-      print('✅ Activity finished and saved');
+      print('✅ Activity finished and cleared');
+      print('========== FINISH ACTIVITY END ==========\n');
+
     } catch (e) {
-      print('❌ Error saving activity: $e');
+      print('❌ ERROR saving activity: $e');
+      print('❌ Error type: ${e.runtimeType}');
+      print('❌ Stack trace:');
+      print(StackTrace.current);
+      print('========== FINISH ACTIVITY END (WITH ERROR) ==========\n');
       rethrow;
     }
   }
 
   Future<void> _updateUserStats() async {
     try {
+      print('📊 Updating user stats...');
+
       if (_userBox.isEmpty) {
         print('⚠️ User box is empty, creating default user');
         // Create a default user if none exists
@@ -378,33 +463,54 @@ class ActivityService {
           memberSince: DateTime.now(),
         );
         await _userBox.put('current', defaultUser);
+        print('✅ Default user created');
       }
 
       final user = _userBox.get('current');
-      if (user == null) return;
+      if (user == null) {
+        print('❌ User still null after creation attempt');
+        return;
+      }
+
+      print('📊 Current user stats:');
+      print('  - Total activities: ${user.totalActivities}');
+      print('  - Total distance: ${user.totalDistance}');
+      print('  - Total duration: ${user.totalDuration}');
 
       final updatedUser = user.copyWith(
         totalActivities: user.totalActivities + 1,
         totalDistance: user.totalDistance + _totalDistance,
-        totalDuration: user.totalDuration + _currentActivity!.duration.round(),
+        totalDuration: user.totalDuration + (_currentActivity?.duration ?? 0).round(),
         totalElevation: user.totalElevation + _elevationGain.round(),
       );
 
       await _userBox.put('current', updatedUser);
-      print('✅ User stats updated');
+      print('✅ User stats updated successfully');
+      print('  - New total activities: ${updatedUser.totalActivities}');
+      print('  - New total distance: ${updatedUser.totalDistance}');
+
     } catch (e) {
       print('❌ Error updating user stats: $e');
     }
   }
 
   void cancelActivity() {
-    print('✅ Cancelling activity');
+    print('📱 ActivityService: Cancelling activity');
     _currentActivity = null;
     _resetMetrics();
+    print('✅ Activity cancelled');
   }
 
   List<Activity> getAllActivities() {
-    return _activityBox.values.toList().reversed.toList();
+    try {
+      _initBoxes();
+      final activities = _activityBox.values.toList().reversed.toList();
+      print('📋 getAllActivities() called - found ${activities.length} activities');
+      return activities;
+    } catch (e) {
+      print('❌ Error getting activities: $e');
+      return [];
+    }
   }
 
   List<Activity> getActivitiesByType(ActivityType type) {
