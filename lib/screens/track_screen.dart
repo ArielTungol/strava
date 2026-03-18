@@ -115,7 +115,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ START BUTTON FUNCTION - Works!
+  /// ✅ START BUTTON FUNCTION
   void _startTracking() {
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
@@ -131,9 +131,9 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
       return;
     }
 
-    // Clear previous path
+    // Clear previous path and start with current location
     setState(() {
-      _traveledPath = [currentLocation]; // Start with current location
+      _traveledPath = [currentLocation];
     });
 
     // Start activity in service
@@ -145,12 +145,15 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     // Start location tracking
     ref.read(locationTrackingProvider.notifier).startTracking();
 
-    // Start timer to update UI
+    // Start timer to update UI every second
     _statsTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {}); // Refresh UI to show updated stats
       }
     });
+
+    // Center map on current location
+    _mapController.move(currentLocation, 16);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -173,17 +176,10 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  /// ✅ FINISH BUTTON FUNCTION - Works! Saves to history
+  /// ✅ FINISH BUTTON FUNCTION
   Future<void> _stopTracking() async {
     // Stop timer
     _statsTimer?.cancel();
-
-    // Show loading indicator
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
 
     // Finish activity - this saves to Hive database
     await ref.read(currentActivityProvider.notifier).finishActivity();
@@ -192,17 +188,12 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     ref.read(locationTrackingProvider.notifier).stopTracking();
     ref.read(currentSpeedProvider.notifier).resetSpeed();
 
-    // Close loading dialog
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-
     // Show success message
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('✅ Activity saved to history!'),
         backgroundColor: Colors.green,
-        duration: Duration(seconds: 3),
+        duration: Duration(seconds: 2),
       ),
     );
 
@@ -344,31 +335,46 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     final travelModeColor = _getTravelModeColor(travelMode);
     final currentSpeed = ref.watch(currentSpeedProvider);
 
-    // ✅ UPDATE PATH - Add new points as you move
+    // ✅ UPDATE PATH - Add new points as you move (REAL-TIME)
     if (isTracking && currentLocation != null) {
       // Check if we need to add this point to the path
       if (_traveledPath.isEmpty) {
-        _traveledPath.add(currentLocation);
+        _traveledPath = [currentLocation];
       } else {
         final lastPoint = _traveledPath.last;
+        // Calculate distance from last point
+        double distance = _calculateDistance(lastPoint, currentLocation);
         // Only add if moved more than 5 meters (prevents duplicate points)
-        if (_calculateDistance(lastPoint, currentLocation) > 5) {
-          setState(() {
-            _traveledPath.add(currentLocation);
+        if (distance > 5) {
+          // Use WidgetsBinding to avoid setState during build
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _traveledPath.add(currentLocation);
+              });
+            }
           });
         }
       }
     }
 
-    // ✅ UPDATE MARKER POSITION
+    // ✅ UPDATE MARKER POSITION - Moves in real-time as you move
     if (currentLocation != null) {
       if (_currentAnimatedPosition == null) {
-        setState(() {
-          _currentAnimatedPosition = currentLocation;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _currentAnimatedPosition = currentLocation;
+            });
+          }
         });
       } else if (_currentAnimatedPosition!.latitude != currentLocation.latitude ||
           _currentAnimatedPosition!.longitude != currentLocation.longitude) {
-        _animateMarkerToNewPosition(currentLocation);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _animateMarkerToNewPosition(currentLocation);
+          }
+        });
       }
     }
 
@@ -377,6 +383,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         title: const Text('Track Activity'),
         backgroundColor: travelModeColor.withValues(alpha: 0.9),
         foregroundColor: Colors.white,
+        // ✅ ACTIVITY SELECTOR - Back in the app bar!
         actions: [
           if (!isTracking)
             PopupMenuButton<String>(
@@ -449,7 +456,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               // Markers
               MarkerLayer(
                 markers: [
-                  // Current position marker
+                  // ✅ CURRENT POSITION MARKER - Moves as you move
                   if (_currentAnimatedPosition != null)
                     Marker(
                       point: _currentAnimatedPosition!,
@@ -604,6 +611,37 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               ),
             ),
           ),
+
+          // ✅ PATH INFO
+          if (isTracking && _traveledPath.length > 1)
+            Positioned(
+              bottom: 100,
+              left: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.route, color: travelModeColor, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_traveledPath.length} points',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade800,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
