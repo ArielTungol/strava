@@ -63,7 +63,7 @@ class LocationTracking extends _$LocationTracking {
 
     service.startTracking(
       onPositionChanged: (position) {
-        // Update current location
+        // Update current location (this triggers marker movement)
         ref.read(currentLocationProvider.notifier).updateLocation(position);
 
         // Add route point for activity if tracking
@@ -72,6 +72,7 @@ class LocationTracking extends _$LocationTracking {
           final speed = service.currentPosition?.speed ?? 0;
           final altitude = service.currentPosition?.altitude ?? 0;
           ref.read(activityServiceProvider).addRoutePoint(position, speed, altitude);
+          // Force update activity to refresh UI
           ref.read(currentActivityProvider.notifier).updateActivity();
         }
       },

@@ -34,6 +34,9 @@ class ActivityService {
   int _currentSplitIndex = 0;
   static const double splitDistance = 1000; // 1km splits
 
+  // For distance accuracy
+  static const double minDistanceDelta = 5.0; // Minimum 5 meters between recorded points
+
   Activity? get currentActivity => _currentActivity;
   double get currentDistance => _totalDistance;
   double get currentMaxSpeed => _maxSpeed;
@@ -53,6 +56,7 @@ class ActivityService {
     );
 
     _resetMetrics();
+    print('Activity started: $name, type: $type'); // Debug log
   }
 
   void _resetMetrics() {
@@ -70,35 +74,41 @@ class ActivityService {
   }
 
   void addRoutePoint(LatLng position, double speed, double altitude, {double? heartRate}) {
-    if (_currentActivity == null) return;
+    if (_currentActivity == null) {
+      print('No current activity, ignoring route point'); // Debug log
+      return;
+    }
 
     final now = DateTime.now();
+
+    // Check if we have a last position and if we should record this point
+    if (_lastPosition != null) {
+      final distance = _calculateDistance(_lastPosition!, position);
+
+      // Skip if not moved enough
+      if (distance < minDistanceDelta) {
+        // Still update stats but don't add point
+        _updateStatsWithoutPoint(position, speed, altitude, distance, now);
+        return;
+      }
+    }
 
     // Calculate time delta for speed validation
     if (_lastTimestamp != null) {
       final timeDelta = now.difference(_lastTimestamp!).inSeconds;
-      if (timeDelta > 0) {
-        // Calculate speed from position change for validation
-        if (_lastPosition != null) {
-          final distanceFromLast = geolocator.Geolocator.distanceBetween(
-            _lastPosition!.latitude,
-            _lastPosition!.longitude,
-            position.latitude,
-            position.longitude,
-          );
+      if (timeDelta > 0 && _lastPosition != null) {
+        final distanceFromLast = _calculateDistance(_lastPosition!, position);
+        final calculatedSpeed = distanceFromLast / timeDelta;
 
-          final calculatedSpeed = distanceFromLast / timeDelta;
-
-          // Use the higher of reported speed and calculated speed
-          // but cap unrealistic speeds (> 20 m/s for running, > 30 m/s for cycling)
-          double maxAllowedSpeed = 30.0; // m/s (108 km/h)
-          if (_currentActivity!.type == ActivityType.running ||
-              _currentActivity!.type == ActivityType.walking) {
-            maxAllowedSpeed = 10.0; // 36 km/h max for running/walking
-          }
-
-          speed = min(max(calculatedSpeed, speed), maxAllowedSpeed);
+        // Use the higher of reported speed and calculated speed
+        // but cap unrealistic speeds
+        double maxAllowedSpeed = 30.0; // m/s (108 km/h)
+        if (_currentActivity!.type == ActivityType.running ||
+            _currentActivity!.type == ActivityType.walking) {
+          maxAllowedSpeed = 10.0; // 36 km/h max for running/walking
         }
+
+        speed = min(max(calculatedSpeed, speed), maxAllowedSpeed);
       }
     }
 
@@ -124,16 +134,11 @@ class ActivityService {
       routePoints: updatedRoutePoints,
     );
 
-    if (_lastPosition != null && _lastTimestamp != null) {
-      double distance = geolocator.Geolocator.distanceBetween(
-        _lastPosition!.latitude,
-        _lastPosition!.longitude,
-        position.latitude,
-        position.longitude,
-      );
+    if (_lastPosition != null) {
+      double distance = _calculateDistance(_lastPosition!, position);
 
       // Validate distance (can't be negative or extremely large)
-      if (distance > 0 && distance < 500) { // Max 500m between points (unrealistic but safe)
+      if (distance > 0 && distance < 500) { // Max 500m between points
         _totalDistance += distance;
         _currentActivity = _currentActivity!.copyWith(
           distance: _totalDistance,
@@ -181,6 +186,46 @@ class ActivityService {
     _lastElevation = altitude;
 
     _updateActivityStats();
+    print('Route point added. Total distance: $_totalDistance'); // Debug log
+  }
+
+  void _updateStatsWithoutPoint(LatLng position, double speed, double altitude, double distance, DateTime now) {
+    // Update only stats without adding a route point
+    if (_lastPosition != null) {
+      _totalDistance += distance;
+      _currentActivity = _currentActivity!.copyWith(
+        distance: _totalDistance,
+      );
+
+      if (speed > _maxSpeed) {
+        _maxSpeed = speed;
+        _currentActivity = _currentActivity!.copyWith(
+          maxSpeed: _maxSpeed,
+        );
+      }
+
+      if (_lastElevation != 0 && altitude > _lastElevation) {
+        _elevationGain += (altitude - _lastElevation);
+        _currentActivity = _currentActivity!.copyWith(
+          elevationGain: _elevationGain,
+        );
+      }
+    }
+
+    _lastPosition = position;
+    _lastTimestamp = now;
+    _lastElevation = altitude;
+
+    _updateActivityStats();
+  }
+
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    return geolocator.Geolocator.distanceBetween(
+      point1.latitude,
+      point1.longitude,
+      point2.latitude,
+      point2.longitude,
+    );
   }
 
   void _updateSplits(double distance) {
@@ -200,7 +245,7 @@ class ActivityService {
         'pace': splitTime / (splitDistance / 1000),
         'startTime': _splits.isEmpty
             ? _currentActivity!.startTime.toIso8601String()
-            : _splits.last['endTime'],
+            : _splits.last['startTime'],
         'endTime': DateTime.now().toIso8601String(),
       });
 
@@ -217,7 +262,7 @@ class ActivityService {
         .toDouble();
 
     double averageSpeed = 0;
-    if (duration > 0) {
+    if (duration > 0 && _totalDistance > 0) {
       averageSpeed = _totalDistance / duration;
     }
 
@@ -261,7 +306,12 @@ class ActivityService {
   }
 
   Future<void> finishActivity() async {
-    if (_currentActivity == null) return;
+    if (_currentActivity == null) {
+      print('No current activity to finish'); // Debug log
+      return;
+    }
+
+    print('Finishing activity...'); // Debug log
 
     // Add final split if there's remaining distance
     if (_lastSplitDistance > 100) {
@@ -282,23 +332,32 @@ class ActivityService {
             : 0,
         'startTime': _splits.isEmpty
             ? _currentActivity!.startTime.toIso8601String()
-            : _splits.last['endTime'],
+            : _splits.last['startTime'],
         'endTime': DateTime.now().toIso8601String(),
       });
     }
+
+    // Final stats update
+    _updateActivityStats();
 
     _currentActivity = _currentActivity!.copyWith(
       endTime: DateTime.now(),
     );
 
-    _updateActivityStats();
+    print('Saving activity: ${_currentActivity!.id}'); // Debug log
+    print('Distance: ${_currentActivity!.distance}, Duration: ${_currentActivity!.duration}'); // Debug log
 
+    // Save to Hive
     await _activityBox.put(_currentActivity!.id, _currentActivity!);
+
+    // Update user stats
     await _updateUserStats();
 
+    // Clear current activity
     _currentActivity = null;
-    _lastPosition = null;
-    _lastTimestamp = null;
+    _resetMetrics();
+
+    print('Activity finished and saved'); // Debug log
   }
 
   Future<void> _updateUserStats() async {
@@ -318,6 +377,7 @@ class ActivityService {
   }
 
   void cancelActivity() {
+    print('Cancelling activity'); // Debug log
     _currentActivity = null;
     _resetMetrics();
   }

@@ -21,38 +21,25 @@ class TrackScreen extends ConsumerStatefulWidget {
   ConsumerState<TrackScreen> createState() => _TrackScreenState();
 }
 
-class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderStateMixin {
+class _TrackScreenState extends ConsumerState<TrackScreen> {
   final MapController _mapController = MapController();
 
-  // Animation for smooth marker movement
-  AnimationController? _markerAnimationController;
-  LatLng? _currentAnimatedPosition;
+  // Simple marker position
+  LatLng? _currentMarkerPosition;
 
   // For tracking polyline
   final List<LatLng> _recordedRoutePoints = [];
 
   // For stats display
   Timer? _statsUpdateTimer;
-  Timer? _turnNotificationTimer;
-  static const int _turnNotificationDurationMs = 4000;
-
-  // For distance accuracy
   LatLng? _lastRecordedPoint;
   double _minDistanceBetweenPoints = 5.0; // Minimum 5 meters between recorded points
 
   @override
   void initState() {
     super.initState();
-    _initializeMarkerAnimation();
     _initializeLocation();
     _startStatsUpdateTimer();
-  }
-
-  void _initializeMarkerAnimation() {
-    _markerAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    );
   }
 
   void _startStatsUpdateTimer() {
@@ -79,85 +66,10 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     if (location != null) {
       locationNotifier.updateLocation(location);
       setState(() {
-        _currentAnimatedPosition = location;
+        _currentMarkerPosition = location;
       });
       _mapController.move(location, 16);
     }
-  }
-
-  double _calculateBearing(LatLng start, LatLng end) {
-    double lat1 = start.latitude * pi / 180;
-    double lon1 = start.longitude * pi / 180;
-    double lat2 = end.latitude * pi / 180;
-    double lon2 = end.longitude * pi / 180;
-
-    double y = sin(lon2 - lon1) * cos(lat2);
-    double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(lon2 - lon1);
-    double bearing = atan2(y, x) * 180 / pi;
-
-    return (bearing + 360) % 360;
-  }
-
-  void _animateMarkerToNewPosition(LatLng newPosition) {
-    if (_currentAnimatedPosition == null) {
-      setState(() {
-        _currentAnimatedPosition = newPosition;
-      });
-      return;
-    }
-
-    // Calculate distance between positions
-    final distance = _calculateDistance(
-      _currentAnimatedPosition!,
-      newPosition,
-    );
-
-    if (distance < 1.0) {
-      setState(() {
-        _currentAnimatedPosition = newPosition;
-      });
-      return;
-    }
-
-    _markerAnimationController?.stop();
-    _markerAnimationController?.reset();
-
-    final startLat = _currentAnimatedPosition!.latitude;
-    final startLng = _currentAnimatedPosition!.longitude;
-    final endLat = newPosition.latitude;
-    final endLng = newPosition.longitude;
-
-    // Adjust animation duration based on distance (faster for short distances)
-    final duration = (distance * 50).clamp(200, 800).toInt();
-    _markerAnimationController?.duration = Duration(milliseconds: duration);
-
-    _markerAnimationController?.addListener(() {
-      if (!mounted) return;
-      final double t = _markerAnimationController!.value;
-      final double interpolatedLat = startLat + (endLat - startLat) * t;
-      final double interpolatedLng = startLng + (endLng - startLng) * t;
-
-      setState(() {
-        _currentAnimatedPosition = LatLng(interpolatedLat, interpolatedLng);
-      });
-    });
-
-    _markerAnimationController?.forward();
-  }
-
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    const double R = 6371000; // Earth's radius in meters
-    final double lat1 = point1.latitude * pi / 180;
-    final double lat2 = point2.latitude * pi / 180;
-    final double deltaLat = (point2.latitude - point1.latitude) * pi / 180;
-    final double deltaLon = (point2.longitude - point1.longitude) * pi / 180;
-
-    final double a = sin(deltaLat / 2) * sin(deltaLat / 2) +
-        cos(lat1) * cos(lat2) *
-            sin(deltaLon / 2) * sin(deltaLon / 2);
-    final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return R * c;
   }
 
   void _addRoutePointForPolyline(LatLng point) {
@@ -168,21 +80,21 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
       return;
     }
 
-    final distance = _calculateDistance(
-      _lastRecordedPoint!,
-      point,
-    );
+    // Simple distance check
+    double distance = sqrt(
+        pow(point.latitude - _lastRecordedPoint!.latitude, 2) +
+            pow(point.longitude - _lastRecordedPoint!.longitude, 2)
+    ) * 111000; // Rough conversion to meters
 
     if (distance >= _minDistanceBetweenPoints) {
       _recordedRoutePoints.add(point);
       _lastRecordedPoint = point;
 
-      // Limit the number of points to prevent performance issues
+      // Limit the number of points
       if (_recordedRoutePoints.length > 1000) {
         _recordedRoutePoints.removeAt(0);
       }
 
-      // Update UI to show new polyline point
       setState(() {});
     }
   }
@@ -273,13 +185,32 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   }
 
   Future<void> _stopTracking() async {
-    await ref.read(currentActivityProvider.notifier).finishActivity();
-    ref.read(locationTrackingProvider.notifier).stopTracking();
-    ref.read(currentSpeedProvider.notifier).resetSpeed();
+    try {
+      print('Stopping tracking...');
 
-    // Clear route points but keep for summary
-    if (mounted) {
-      _showActivitySummary();
+      // Stop location tracking first
+      ref.read(locationTrackingProvider.notifier).stopTracking();
+
+      // Then finish the activity
+      await ref.read(currentActivityProvider.notifier).finishActivity();
+
+      // Reset speed
+      ref.read(currentSpeedProvider.notifier).resetSpeed();
+
+      print('Tracking stopped successfully');
+
+      // Show summary if mounted
+      if (mounted) {
+        _showActivitySummary();
+      }
+    } catch (e) {
+      print('Error stopping tracking: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error finishing activity: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -294,6 +225,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     setState(() {
       _recordedRoutePoints.clear();
       _lastRecordedPoint = null;
+      _currentMarkerPosition = ref.read(currentLocationProvider);
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -368,176 +300,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     );
   }
 
-  void _showPinnedRouteBottomSheet() {
-    final navigationState = ref.read(navigationStateProvider).valueOrNull;
-    if (navigationState == null) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.7,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.location_on, color: Colors.purple, size: 20),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Pinned Route Details',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: DefaultTabController(
-                length: 2,
-                child: Column(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-                      ),
-                      child: const TabBar(
-                        tabs: [
-                          Tab(text: 'Directions'),
-                          Tab(text: 'Places'),
-                        ],
-                        labelColor: Colors.purple,
-                        unselectedLabelColor: Colors.grey,
-                        indicatorColor: Colors.purple,
-                      ),
-                    ),
-                    Expanded(
-                      child: TabBarView(
-                        children: [
-                          // Directions Tab
-                          ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: navigationState.instructions.length,
-                            itemBuilder: (context, index) {
-                              final instruction = navigationState.instructions[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.purple.withValues(alpha: 0.1),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(
-                                        instruction.icon,
-                                        color: Colors.purple,
-                                        size: 20,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            instruction.instruction,
-                                            style: const TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            _formatDistance(instruction.distance),
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey.shade600,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                          // Places Tab
-                          ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: navigationState.places.length,
-                            itemBuilder: (context, index) {
-                              final place = navigationState.places[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 8),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        color: index < 3 ? Colors.purple : Colors.grey.shade400,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        place,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
-                                          color: index < 3 ? Colors.black : Colors.grey.shade700,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     // Watch providers
@@ -557,17 +319,18 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     final totalDistance = navigationState.valueOrNull?.distance ?? 0;
     final totalDuration = navigationState.valueOrNull?.duration ?? 0;
 
-    // Update recorded route points when tracking
+    // Update marker position when current location changes
+    if (currentLocation != null) {
+      // Simple direct update - marker will move immediately
+      _currentMarkerPosition = currentLocation;
+    }
+
+    // Add route point for polyline when tracking
     if (isTracking && currentLocation != null) {
       _addRoutePointForPolyline(currentLocation);
     }
 
-    // Update animated position when current location changes
-    if (currentLocation != null && _currentAnimatedPosition != currentLocation) {
-      _animateMarkerToNewPosition(currentLocation);
-    }
-
-    // Build polyline points from either recorded points or activity route points
+    // Build polyline points
     final List<LatLng> displayPolylinePoints;
     if (isTracking) {
       displayPolylinePoints = List<LatLng>.from(_recordedRoutePoints);
@@ -665,7 +428,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               maxZoom: 19,
               minZoom: 3,
               interactionOptions: const InteractionOptions(
-                flags: ~InteractiveFlag.rotate, // Disable rotation for better UX
+                flags: ~InteractiveFlag.rotate,
               ),
               onTap: _onMapTap,
             ),
@@ -676,7 +439,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Navigation route polyline (purple)
+              // Navigation route polyline
               if (routePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -684,13 +447,11 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                       points: routePoints,
                       color: Colors.purple.withValues(alpha: 0.8),
                       strokeWidth: 4,
-                      borderColor: Colors.white,
-                      borderStrokeWidth: 1,
                     ),
                   ],
                 ),
 
-              // Recorded activity polyline (color based on activity type)
+              // Recorded activity polyline
               if (displayPolylinePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -698,8 +459,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                       points: displayPolylinePoints,
                       color: travelModeColor.withValues(alpha: 0.9),
                       strokeWidth: 5,
-                      borderColor: Colors.white,
-                      borderStrokeWidth: 2,
                     ),
                   ],
                 ),
@@ -722,63 +481,27 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               MarkerLayer(
                 markers: [
                   // Current position marker
-                  if (_currentAnimatedPosition != null)
+                  if (_currentMarkerPosition != null)
                     Marker(
-                      point: _currentAnimatedPosition!,
-                      width: 32,
-                      height: 32,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // Pulsing animation when tracking
-                          if (isTracking)
-                            TweenAnimationBuilder(
-                              tween: Tween<double>(begin: 0.5, end: 1.5),
-                              duration: const Duration(seconds: 1),
-                              curve: Curves.easeInOut,
-                              builder: (context, double value, child) {
-                                return Container(
-                                  width: 32 * value,
-                                  height: 32 * value,
-                                  decoration: BoxDecoration(
-                                    color: travelModeColor.withValues(alpha: 0.3),
-                                    shape: BoxShape.circle,
-                                  ),
-                                );
-                              },
+                      point: _currentMarkerPosition!,
+                      width: 24,
+                      height: 24,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: travelModeColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 6,
+                              spreadRadius: 1,
                             ),
-                          // Outer ring
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 500),
-                            width: 24,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              color: Colors.transparent,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                          // Inner dot
-                          Container(
-                            width: 16,
-                            height: 16,
-                            decoration: BoxDecoration(
-                              color: travelModeColor,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.3),
-                                  blurRadius: 6,
-                                  spreadRadius: 1,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
+                        child: isTracking
+                            ? const Icon(Icons.my_location, color: Colors.white, size: 12)
+                            : null,
                       ),
                     ),
 
@@ -955,61 +678,51 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               top: pinnedDestination != null ? 270 : (isTracking ? 170 : 80),
               left: 20,
               right: 20,
-              child: TweenAnimationBuilder(
-                duration: const Duration(milliseconds: 300),
-                tween: Tween<double>(begin: 0, end: 1),
-                curve: Curves.easeOutBack,
-                builder: (context, double value, child) {
-                  return Transform.scale(
-                    scale: value,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: (pinnedDestination != null ? Colors.purple : travelModeColor).withValues(alpha: 0.3),
+                      blurRadius: 12,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                  border: Border.all(
+                    color: pinnedDestination != null ? Colors.purple : travelModeColor,
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (pinnedDestination != null ? Colors.purple : travelModeColor).withValues(alpha: 0.3),
-                            blurRadius: 12,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                        border: Border.all(
-                          color: pinnedDestination != null ? Colors.purple : travelModeColor,
-                          width: 1.5,
-                        ),
+                        color: (pinnedDestination != null ? Colors.purple : travelModeColor).withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
                       ),
-                      child: Row(
+                      child: Icon(turnNotification.icon, color: pinnedDestination != null ? Colors.purple : travelModeColor, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: (pinnedDestination != null ? Colors.purple : travelModeColor).withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(turnNotification.icon, color: pinnedDestination != null ? Colors.purple : travelModeColor, size: 20),
+                          Text(
+                            turnNotification.instruction,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  turnNotification.instruction,
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  'in ${turnNotification.distance}',
-                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                                ),
-                              ],
-                            ),
+                          Text(
+                            'in ${turnNotification.distance}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                           ),
                         ],
                       ),
                     ),
-                  );
-                },
+                  ],
+                ),
               ),
             ),
 
@@ -1022,7 +735,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 icon: Icons.route,
                 label: 'Pinned Route',
                 color: Colors.purple,
-                onPressed: _showPinnedRouteBottomSheet,
+                onPressed: () => _showPinnedRouteBottomSheet(navigationState.valueOrNull),
               ),
             ),
 
@@ -1130,6 +843,175 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showPinnedRouteBottomSheet(NavigationData? navigationState) {
+    if (navigationState == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.location_on, color: Colors.purple, size: 20),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Pinned Route Details',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: DefaultTabController(
+                length: 2,
+                child: Column(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+                      ),
+                      child: const TabBar(
+                        tabs: [
+                          Tab(text: 'Directions'),
+                          Tab(text: 'Places'),
+                        ],
+                        labelColor: Colors.purple,
+                        unselectedLabelColor: Colors.grey,
+                        indicatorColor: Colors.purple,
+                      ),
+                    ),
+                    Expanded(
+                      child: TabBarView(
+                        children: [
+                          // Directions Tab
+                          ListView.builder(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: navigationState.instructions.length,
+                            itemBuilder: (context, index) {
+                              final instruction = navigationState.instructions[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.purple.withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        instruction.icon,
+                                        color: Colors.purple,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            instruction.instruction,
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            _formatDistance(instruction.distance),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                          // Places Tab
+                          ListView.builder(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: navigationState.places.length,
+                            itemBuilder: (context, index) {
+                              final place = navigationState.places[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        color: index < 3 ? Colors.purple : Colors.grey.shade400,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        place,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
+                                          color: index < 3 ? Colors.black : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1322,9 +1204,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
 
   @override
   void dispose() {
-    _markerAnimationController?.dispose();
     _statsUpdateTimer?.cancel();
-    _turnNotificationTimer?.cancel();
     super.dispose();
   }
 }
