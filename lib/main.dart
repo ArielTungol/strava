@@ -37,18 +37,31 @@ Future<void> _initializeHive() async {
   try {
     await Hive.initFlutter();
 
-    // Register Hive adapters
+    // IMPORTANT: Register ALL adapters in the correct order
+    // The typeIds must match what's in your generated files
+
+    // Register ActivityType adapter first (typeId: 0)
     if (!Hive.isAdapterRegistered(0)) {
-      Hive.registerAdapter(ActivityAdapter());
-    }
-    if (!Hive.isAdapterRegistered(1)) {
       Hive.registerAdapter(ActivityTypeAdapter());
+      debugPrint('✅ Registered ActivityTypeAdapter (typeId: 0)');
     }
+
+    // Register Activity adapter (typeId: 1)
+    if (!Hive.isAdapterRegistered(1)) {
+      Hive.registerAdapter(ActivityAdapter());
+      debugPrint('✅ Registered ActivityAdapter (typeId: 1)');
+    }
+
+    // Register RoutePoint adapter (typeId: 2)
     if (!Hive.isAdapterRegistered(2)) {
       Hive.registerAdapter(RoutePointAdapter());
+      debugPrint('✅ Registered RoutePointAdapter (typeId: 2)');
     }
+
+    // Register User adapter (typeId: 3)
     if (!Hive.isAdapterRegistered(3)) {
       Hive.registerAdapter(UserAdapter());
+      debugPrint('✅ Registered UserAdapter (typeId: 3)');
     }
 
     // Open boxes
@@ -56,6 +69,7 @@ Future<void> _initializeHive() async {
     await Hive.openBox<User>('user');
 
     debugPrint('✅ Hive initialized successfully');
+    debugPrint('📦 Boxes opened: activities, user');
   } catch (e) {
     debugPrint('❌ Hive initialization error: $e');
   }

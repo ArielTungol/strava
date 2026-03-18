@@ -56,7 +56,7 @@ class ActivityService {
     );
 
     _resetMetrics();
-    print('Activity started: $name, type: $type'); // Debug log
+    print('✅ Activity started: $name, type: $type');
   }
 
   void _resetMetrics() {
@@ -75,7 +75,6 @@ class ActivityService {
 
   void addRoutePoint(LatLng position, double speed, double altitude, {double? heartRate}) {
     if (_currentActivity == null) {
-      print('No current activity, ignoring route point'); // Debug log
       return;
     }
 
@@ -186,7 +185,6 @@ class ActivityService {
     _lastElevation = altitude;
 
     _updateActivityStats();
-    print('Route point added. Total distance: $_totalDistance'); // Debug log
   }
 
   void _updateStatsWithoutPoint(LatLng position, double speed, double altitude, double distance, DateTime now) {
@@ -307,11 +305,11 @@ class ActivityService {
 
   Future<void> finishActivity() async {
     if (_currentActivity == null) {
-      print('No current activity to finish'); // Debug log
+      print('❌ No current activity to finish');
       return;
     }
 
-    print('Finishing activity...'); // Debug log
+    print('✅ Finishing activity...');
 
     // Add final split if there's remaining distance
     if (_lastSplitDistance > 100) {
@@ -344,40 +342,63 @@ class ActivityService {
       endTime: DateTime.now(),
     );
 
-    print('Saving activity: ${_currentActivity!.id}'); // Debug log
-    print('Distance: ${_currentActivity!.distance}, Duration: ${_currentActivity!.duration}'); // Debug log
+    print('✅ Saving activity: ${_currentActivity!.id}');
+    print('✅ Distance: ${_currentActivity!.distance}, Duration: ${_currentActivity!.duration}');
+    print('✅ Activity type: ${_currentActivity!.type}');
 
-    // Save to Hive
-    await _activityBox.put(_currentActivity!.id, _currentActivity!);
+    try {
+      // Save to Hive
+      await _activityBox.put(_currentActivity!.id, _currentActivity!);
+      print('✅ Activity saved successfully to Hive');
 
-    // Update user stats
-    await _updateUserStats();
+      // Update user stats
+      await _updateUserStats();
 
-    // Clear current activity
-    _currentActivity = null;
-    _resetMetrics();
+      // Clear current activity
+      _currentActivity = null;
+      _resetMetrics();
 
-    print('Activity finished and saved'); // Debug log
+      print('✅ Activity finished and saved');
+    } catch (e) {
+      print('❌ Error saving activity: $e');
+      rethrow;
+    }
   }
 
   Future<void> _updateUserStats() async {
-    if (_userBox.isEmpty) return;
+    try {
+      if (_userBox.isEmpty) {
+        print('⚠️ User box is empty, creating default user');
+        // Create a default user if none exists
+        final defaultUser = User(
+          id: 'current',
+          email: 'user@example.com',
+          username: 'user',
+          displayName: 'User',
+          memberSince: DateTime.now(),
+        );
+        await _userBox.put('current', defaultUser);
+      }
 
-    final user = _userBox.get('current');
-    if (user == null) return;
+      final user = _userBox.get('current');
+      if (user == null) return;
 
-    final updatedUser = user.copyWith(
-      totalActivities: user.totalActivities + 1,
-      totalDistance: user.totalDistance + _totalDistance,
-      totalDuration: user.totalDuration + _currentActivity!.duration.round(),
-      totalElevation: user.totalElevation + _elevationGain.round(),
-    );
+      final updatedUser = user.copyWith(
+        totalActivities: user.totalActivities + 1,
+        totalDistance: user.totalDistance + _totalDistance,
+        totalDuration: user.totalDuration + _currentActivity!.duration.round(),
+        totalElevation: user.totalElevation + _elevationGain.round(),
+      );
 
-    await _userBox.put('current', updatedUser);
+      await _userBox.put('current', updatedUser);
+      print('✅ User stats updated');
+    } catch (e) {
+      print('❌ Error updating user stats: $e');
+    }
   }
 
   void cancelActivity() {
-    print('Cancelling activity'); // Debug log
+    print('✅ Cancelling activity');
     _currentActivity = null;
     _resetMetrics();
   }

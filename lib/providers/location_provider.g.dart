@@ -54,7 +54,7 @@ final currentLocationProvider =
 );
 
 typedef _$CurrentLocation = AutoDisposeNotifier<LatLng?>;
-String _$locationTrackingHash() => r'2ed212befc64f8ecf269e40804458a4ffc969be2';
+String _$locationTrackingHash() => r'dd87b50b67615f57cb096815ca253263d4623b21';
 
 /// See also [LocationTracking].
 @ProviderFor(LocationTracking)
