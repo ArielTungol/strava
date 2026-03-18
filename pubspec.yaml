@@ -1,81 +1,80 @@
-workflows:
-  ios-free-build:
-    name: iOS Free Accounts Build
-    max_build_duration: 120
-    instance_type: mac_mini_m2
-    environment:
-      flutter: stable
-      xcode: latest
-      cocoapods: default
-    cache:
-      cache_paths:
-        - ~/.pub-cache
-        - $FCI_BUILD_DIR/ios/Pods
-    scripts:
-      - name: Setup Dependencies
-        script: |
-          echo "📦 Getting Flutter packages..."
-          flutter pub get
-          flutter precache --ios
+name: strava
+description: A Strava-like fitness tracking app
+publish_to: 'none'
+version: 1.0.0+1
 
-      - name: Generate Hive Adapters
-        script: |
-          echo "🔨 Generating code..."
-          flutter pub run build_runner build --delete-conflicting-outputs
+# ✅ SDK constraint - This was missing and causing the error!
+environment:
+  sdk: ^3.10.4
 
-      - name: Install CocoaPods
-        script: |
-          echo "📱 Installing CocoaPods..."
-          cd ios
-          rm -rf Pods Podfile.lock
-          pod install --repo-update
-          cd ..
+dependencies:
+  flutter:
+    sdk: flutter
 
-      - name: Build iOS App
-        script: |
-          echo "🏗️ Building iOS app..."
-          
-          # Build the iOS app without code signing (for free accounts)
-          flutter build ios --release --no-codesign
-          
-          # Check if build succeeded
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            echo "✅ Build successful! Creating IPA..."
-          
-            # Create IPA for distribution
-            cd build/ios/iphoneos
-          
-            # Create Payload directory and package the app
-            mkdir -p Payload
-            cp -r Runner.app Payload/
-          
-            # Create IPA file
-            zip -r ../../../strava_app.ipa Payload
-            cd ../../..
-          
-            # Verify IPA was created
-            if [ -f "strava_app.ipa" ]; then
-              echo "✅ IPA created successfully: strava_app.ipa"
-              ls -la strava_app.ipa
-            else
-              echo "❌ Failed to create IPA"
-              exit 1
-            fi
-          else
-            echo "❌ Error: Build failed - Runner.app not found"
-            echo "Debug: Listing contents of build/ios:"
-            ls -la build/ios/ || true
-            echo "Debug: Listing contents of build/ios/iphoneos:"
-            ls -la build/ios/iphoneos/ || true
-            exit 1
-          fi
+  # Cupertino icons for iOS style
+  cupertino_icons: ^1.0.8
 
-    artifacts:
-      - strava_app.ipa
-      - build/ios/iphoneos/Runner.app
-      - build/ios/iphonesimulator/Runner.app
+  # Riverpod for state management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.3.5
 
-    publishing:
-      email:
-        recipients:
-          - your-email@example.com  # Change to your email
+  # Maps
+  flutter_map: ^8.2.2
+  flutter_map_cancellable_tile_provider: ^3.1.1
+  latlong2: ^0.9.1
+
+  # Location
+  geolocator: ^14.0.2
+
+  # Networking
+  http: ^1.3.0
+
+  # Local Database
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Permissions
+  permission_handler: ^12.0.1
+
+  # Utilities
+  intl: ^0.20.2
+  path_provider: ^2.1.5
+  equatable: ^2.0.5
+  url_launcher: ^6.3.1  # For opening OSM attribution links
+
+  # UI Enhancements
+  google_fonts: ^6.2.1
+  flutter_svg: ^2.0.10+1
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  fl_chart: ^0.69.0
+  share_plus: ^10.1.2
+
+  # Notifications
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.10.0
+
+  # Background Tasks
+  workmanager: ^0.5.2
+  background_fetch: ^1.3.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # Code generation
+  build_runner: ^2.4.13
+  hive_generator: ^2.0.1
+  riverpod_generator: ^2.4.0
+
+  # Linting
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Assets
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/avatars/
