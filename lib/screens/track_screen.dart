@@ -9,7 +9,6 @@ import 'package:flutter/services.dart';
 
 import '../providers/activity_provider.dart';
 import '../providers/location_provider.dart';
-import '../providers/navigation_provider.dart';
 import '../providers/settings_provider.dart';
 import '../models/activity.dart';
 
@@ -27,8 +26,8 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
   AnimationController? _markerAnimationController;
   LatLng? _currentAnimatedPosition;
 
-  Timer? _turnNotificationTimer;
-  static const int _turnNotificationDurationMs = 4000;
+  // Path tracking
+  List<LatLng> _pathPoints = [];
 
   @override
   void initState() {
@@ -105,32 +104,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     _markerAnimationController?.forward();
   }
 
-  void _onMapTap(TapPosition tapPosition, LatLng point) {
-    final isSelecting = ref.read(navigationUIStateProvider);
-    final currentActivity = ref.read(currentActivityProvider);
-
-    if (isSelecting && currentActivity == null) {
-      ref.read(pinnedDestinationProvider.notifier).setDestination(point);
-      ref.read(navigationUIStateProvider.notifier).stopSelecting();
-
-      final currentLocation = ref.read(currentLocationProvider);
-      if (currentLocation != null) {
-        ref.read(navigationStateProvider.notifier).calculateRoute(
-          currentLocation,
-          point,
-        );
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Pinned destination set!'),
-          duration: const Duration(seconds: 2),
-          backgroundColor: Colors.purple,
-        ),
-      );
-    }
-  }
-
   void _centerOnCurrentLocation() {
     final currentLocation = ref.read(currentLocationProvider);
     if (currentLocation != null) {
@@ -138,15 +111,14 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     }
   }
 
-  void _clearPinnedDestination() {
-    ref.read(pinnedDestinationProvider.notifier).clearDestination();
-    ref.read(navigationStateProvider.notifier).clearRoute();
-    ref.read(turnNotificationProvider.notifier).hideNotification();
-  }
-
   void _startTracking() {
     final travelMode = ref.read(travelModeProvider);
     final activityType = _getActivityTypeFromString(travelMode);
+
+    // Clear previous path points
+    setState(() {
+      _pathPoints.clear();
+    });
 
     ref.read(currentActivityProvider.notifier).startNewActivity(
       '${travelMode.capitalize()} ${DateTime.now().toString().substring(0, 16)}',
@@ -162,12 +134,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         return ActivityType.walking;
       case 'cycling':
         return ActivityType.cycling;
-      case 'hiking':
-        return ActivityType.hiking;
-      case 'swimming':
-        return ActivityType.swimming;
-      case 'workout':
-        return ActivityType.workout;
       case 'running':
       default:
         return ActivityType.running;
@@ -188,8 +154,11 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     ref.read(currentActivityProvider.notifier).cancelActivity();
     ref.read(locationTrackingProvider.notifier).stopTracking();
     ref.read(currentSpeedProvider.notifier).resetSpeed();
-    ref.read(pinnedDestinationProvider.notifier).clearDestination();
-    ref.read(navigationStateProvider.notifier).clearRoute();
+
+    // Clear path points when canceling
+    setState(() {
+      _pathPoints.clear();
+    });
   }
 
   void _showActivitySummary() {
@@ -265,193 +234,23 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     return '${speed.toStringAsFixed(1)} m/s';
   }
 
-  void _showPinnedRouteBottomSheet() {
-    final navigationState = ref.read(navigationStateProvider).valueOrNull;
-    if (navigationState == null) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.7,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.location_on, color: Colors.purple, size: 20),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Pinned Route Details',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: DefaultTabController(
-                length: 2,
-                child: Column(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-                      ),
-                      child: const TabBar(
-                        tabs: [
-                          Tab(text: 'Directions'),
-                          Tab(text: 'Places'),
-                        ],
-                        labelColor: Colors.purple,
-                        unselectedLabelColor: Colors.grey,
-                        indicatorColor: Colors.purple,
-                      ),
-                    ),
-                    Expanded(
-                      child: TabBarView(
-                        children: [
-                          // Directions Tab
-                          ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: navigationState.instructions.length,
-                            itemBuilder: (context, index) {
-                              final instruction = navigationState.instructions[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.purple.withValues(alpha: 0.1),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(
-                                        instruction.icon,
-                                        color: Colors.purple,
-                                        size: 20,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            instruction.instruction,
-                                            style: const TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            _formatDistance(instruction.distance),
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey.shade600,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                          // Places Tab
-                          ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: navigationState.places.length,
-                            itemBuilder: (context, index) {
-                              final place = navigationState.places[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 8),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        color: index < 3 ? Colors.purple : Colors.grey.shade400,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        place,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
-                                          color: index < 3 ? Colors.black : Colors.grey.shade700,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     // Watch providers
     final currentLocation = ref.watch(currentLocationProvider);
     final currentActivity = ref.watch(currentActivityProvider);
     final isTracking = currentActivity != null;
-    final pinnedDestination = ref.watch(pinnedDestinationProvider);
-    final navigationState = ref.watch(navigationStateProvider);
     final travelMode = ref.watch(travelModeProvider);
     final travelModeColor = _getTravelModeColor(travelMode);
-    final turnNotification = ref.watch(turnNotificationProvider);
     final currentSpeed = ref.watch(currentSpeedProvider);
+    final locationHistory = ref.watch(locationHistoryProvider);
 
-    // Get route points from navigation state
-    final routePoints = navigationState.valueOrNull?.routePoints ?? [];
-    final totalDistance = navigationState.valueOrNull?.distance ?? 0;
-    final totalDuration = navigationState.valueOrNull?.duration ?? 0;
+    // Update path points from location history when tracking
+    if (isTracking && locationHistory.isNotEmpty) {
+      setState(() {
+        _pathPoints = locationHistory;
+      });
+    }
 
     // Update animated position when current location changes
     if (currentLocation != null && _currentAnimatedPosition != currentLocation) {
@@ -464,7 +263,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         backgroundColor: travelModeColor.withValues(alpha: 0.9),
         foregroundColor: Colors.white,
         actions: [
-          if (!isTracking && pinnedDestination == null)
+          if (!isTracking)
             PopupMenuButton<String>(
               icon: const Icon(Icons.directions),
               onSelected: (value) => ref.read(travelModeProvider.notifier).setMode(value),
@@ -499,36 +298,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                     ],
                   ),
                 ),
-                const PopupMenuItem(
-                  value: 'hiking',
-                  child: Row(
-                    children: [
-                      Icon(Icons.hiking, color: Colors.brown),
-                      SizedBox(width: 8),
-                      Text('Hiking')
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'swimming',
-                  child: Row(
-                    children: [
-                      Icon(Icons.pool, color: Colors.lightBlue),
-                      SizedBox(width: 8),
-                      Text('Swimming')
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'workout',
-                  child: Row(
-                    children: [
-                      Icon(Icons.fitness_center, color: Colors.purple),
-                      SizedBox(width: 8),
-                      Text('Workout')
-                    ],
-                  ),
-                ),
               ],
             ),
         ],
@@ -542,7 +311,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               initialCenter: currentLocation ?? const LatLng(14.5995, 120.9842),
               initialZoom: 15,
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
-              onTap: _onMapTap,
             ),
             children: [
               TileLayer(
@@ -551,28 +319,14 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 tileProvider: CancellableNetworkTileProvider(),
               ),
 
-              // Route polyline
-              if (routePoints.isNotEmpty)
+              // Path polyline - shows the completed route
+              if (_pathPoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: routePoints,
-                      color: Colors.purple.withValues(alpha: 0.8),
-                      strokeWidth: 5,
-                    ),
-                  ],
-                ),
-
-              // Destination circle
-              if (pinnedDestination != null)
-                CircleLayer(
-                  circles: [
-                    CircleMarker(
-                      point: pinnedDestination,
-                      color: Colors.purple.withValues(alpha: 0.2),
-                      borderColor: Colors.purple,
-                      borderStrokeWidth: 2,
-                      radius: 15,
+                      points: _pathPoints,
+                      color: travelModeColor.withValues(alpha: 0.8),
+                      strokeWidth: 4,
                     ),
                   ],
                 ),
@@ -618,105 +372,15 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                         ],
                       ),
                     ),
-
-                  // Pinned destination marker
-                  if (pinnedDestination != null)
-                    Marker(
-                      point: pinnedDestination,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(Icons.location_pin, color: Colors.purple, size: 40),
-                    ),
                 ],
               ),
             ],
           ),
 
-          // Navigation header for pinned destination
-          if (pinnedDestination != null)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(20),
-                    bottomRight: Radius.circular(20),
-                  ),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.purple.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.location_on, color: Colors.purple, size: 20),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Pinned Destination',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.purple),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _formatTime(DateTime.now().add(Duration(seconds: totalDuration.round()))),
-                                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${_formatDistance(totalDistance)} • ${_formatDuration(totalDuration)}',
-                                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: travelModeColor.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(_getTravelModeIcon(travelMode), size: 16, color: travelModeColor),
-                              const SizedBox(width: 4),
-                              Text(
-                                travelMode.capitalize(),
-                                style: TextStyle(color: travelModeColor, fontWeight: FontWeight.bold),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
           // Live tracking stats
           if (isTracking)
             Positioned(
-              top: pinnedDestination != null ? 200 : 16,
+              top: 16,
               left: 16,
               right: 16,
               child: Container(
@@ -753,96 +417,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               ),
             ),
 
-          // Turn notification
-          if (turnNotification != null)
-            Positioned(
-              top: pinnedDestination != null ? 270 : (isTracking ? 100 : 80),
-              left: 20,
-              right: 20,
-              child: TweenAnimationBuilder(
-                duration: const Duration(milliseconds: 300),
-                tween: Tween<double>(begin: 0, end: 1),
-                curve: Curves.easeOutBack,
-                builder: (context, double value, child) {
-                  return Transform.scale(
-                    scale: value,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (pinnedDestination != null ? Colors.purple : travelModeColor).withValues(alpha: 0.3),
-                            blurRadius: 12,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                        border: Border.all(
-                          color: pinnedDestination != null ? Colors.purple : travelModeColor,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: (pinnedDestination != null ? Colors.purple : travelModeColor).withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(turnNotification.icon, color: pinnedDestination != null ? Colors.purple : travelModeColor, size: 20),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  turnNotification.instruction,
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  'in ${turnNotification.distance}',
-                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-
-          // Route button
-          if (pinnedDestination != null)
-            Positioned(
-              top: isTracking ? 260 : 220,
-              left: 16,
-              child: _buildActionButton(
-                icon: Icons.route,
-                label: 'Pinned Route',
-                color: Colors.purple,
-                onPressed: _showPinnedRouteBottomSheet,
-              ),
-            ),
-
-          // Clear pin button
-          if (pinnedDestination != null)
-            Positioned(
-              top: 220,
-              right: 16,
-              child: _buildActionButton(
-                icon: Icons.clear,
-                label: 'Clear Pin',
-                color: Colors.red,
-                onPressed: _clearPinnedDestination,
-              ),
-            ),
-
           // Map controls
           Positioned(
             bottom: 100,
@@ -854,24 +428,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
                 _buildControlButton(Icons.remove, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1)),
                 const SizedBox(height: 8),
                 _buildControlButton(Icons.my_location, _centerOnCurrentLocation),
-
-                if (!isTracking && pinnedDestination == null) ...[
-                  const SizedBox(height: 8),
-                  _buildControlButton(
-                    Icons.push_pin,
-                        () {
-                      ref.read(navigationUIStateProvider.notifier).startSelecting();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Tap on the map to set a pinned destination'),
-                          duration: Duration(seconds: 3),
-                          backgroundColor: Colors.purple,
-                        ),
-                      );
-                    },
-                    color: Colors.purple,
-                  ),
-                ],
               ],
             ),
           ),
@@ -933,6 +489,37 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
               ),
             ),
           ),
+
+          // Path stats when tracking
+          if (isTracking && _pathPoints.length > 1)
+            Positioned(
+              bottom: 100,
+              left: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.route, color: travelModeColor, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_pathPoints.length} points',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade800,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -946,33 +533,8 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         return Colors.green;
       case 'cycling':
         return Colors.blue;
-      case 'hiking':
-        return Colors.brown;
-      case 'swimming':
-        return Colors.lightBlue;
-      case 'workout':
-        return Colors.purple;
       default:
         return Colors.orange;
-    }
-  }
-
-  IconData _getTravelModeIcon(String mode) {
-    switch (mode) {
-      case 'running':
-        return Icons.directions_run;
-      case 'walking':
-        return Icons.directions_walk;
-      case 'cycling':
-        return Icons.directions_bike;
-      case 'hiking':
-        return Icons.hiking;
-      case 'swimming':
-        return Icons.pool;
-      case 'workout':
-        return Icons.fitness_center;
-      default:
-        return Icons.directions_run;
     }
   }
 
@@ -984,35 +546,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
         const SizedBox(height: 2),
         Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
       ],
-    );
-  }
-
-  Widget _buildActionButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 16),
-            const SizedBox(width: 4),
-            Text(label, style: TextStyle(color: Colors.grey.shade800, fontSize: 12, fontWeight: FontWeight.w500)),
-          ],
-        ),
-      ),
     );
   }
 
@@ -1034,21 +567,9 @@ class _TrackScreenState extends ConsumerState<TrackScreen> with TickerProviderSt
     );
   }
 
-  String _formatTime(DateTime time) {
-    int hour = time.hour;
-    int minute = time.minute;
-    String period = hour >= 12 ? 'PM' : 'AM';
-
-    if (hour > 12) hour -= 12;
-    if (hour == 0) hour = 12;
-
-    return '$hour:${minute.toString().padLeft(2, '0')} $period';
-  }
-
   @override
   void dispose() {
     _markerAnimationController?.dispose();
-    _turnNotificationTimer?.cancel();
     super.dispose();
   }
 }
