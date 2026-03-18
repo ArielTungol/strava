@@ -12,9 +12,6 @@ class LocationService {
   bool _isTracking = false;
 
   Position? get currentPosition => _currentPosition;
-  LatLng? get currentLatLng => _currentPosition != null
-      ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
-      : null;
 
   Future<bool> checkAndRequestPermission() async {
     bool serviceEnabled;
@@ -47,7 +44,6 @@ class LocationService {
     try {
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 10),
       );
 
       _currentPosition = position;
@@ -61,11 +57,14 @@ class LocationService {
     required Function(LatLng) onPositionChanged,
     Function(double)? onSpeedChanged,
   }) async {
+    bool hasPermission = await checkAndRequestPermission();
+    if (!hasPermission) return;
+
     _positionStream?.cancel();
 
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 0,
+      distanceFilter: 2, // Update every 2 meters
     );
 
     _isTracking = true;
@@ -97,8 +96,4 @@ class LocationService {
   }
 
   bool get isTracking => _isTracking;
-
-  void dispose() {
-    stopTracking();
-  }
 }
