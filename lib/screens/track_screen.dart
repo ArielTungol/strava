@@ -212,7 +212,7 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
       print('🛑 Stopping location tracking...');
       ref.read(locationTrackingProvider.notifier).stopTracking();
 
-      // Then finish the activity (this saves to history)
+      // Then finish the activity (this saves to history AND invalidates the list)
       print('💾 Finishing activity and saving to history...');
       await ref.read(currentActivityProvider.notifier).finishActivity();
 
@@ -221,9 +221,9 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
 
       print('✅ Activity finished successfully');
 
-      // Show summary
+      // Show completion popup
       if (mounted) {
-        _showActivitySummary();
+        _showActivityFinishedPopup();
       }
 
     } catch (e) {
@@ -237,6 +237,161 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
     }
 
     print('========== FINISH BUTTON COMPLETE ==========\n');
+  }
+
+  void _showActivityFinishedPopup() {
+    final currentActivity = ref.read(currentActivityProvider);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.emoji_events,
+                  color: Colors.amber,
+                  size: 50,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Activity Finished! 🎉',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Great job! Your activity has been saved.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 20),
+                if (currentActivity != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
+                    ),
+                    child: Column(
+                      children: [
+                        _buildPopupStatRow('Distance', _formatDistance(currentActivity.distance), Icons.straighten, Colors.blue),
+                        const SizedBox(height: 12),
+                        _buildPopupStatRow('Duration', _formatDurationDetailed(currentActivity.duration), Icons.timer, Colors.green),
+                        const SizedBox(height: 12),
+                        _buildPopupStatRow('Calories', '${currentActivity.caloriesBurned} kcal', Icons.local_fire_department, Colors.orange),
+                        if (currentActivity.averageSpeed > 0) ...[
+                          const SizedBox(height: 12),
+                          _buildPopupStatRow('Avg Speed', _formatSpeed(currentActivity.averageSpeed, currentActivity.type), Icons.speed, Colors.purple),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green, size: 16),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Saved to History',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.green),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                setState(() {
+                  _recordedRoutePoints.clear();
+                  _lastRecordedPoint = null;
+                });
+
+                // Show success message
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✓ Activity saved to history!'),
+                    duration: Duration(seconds: 2),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.blue,
+                minimumSize: const Size(200, 45),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+              ),
+              child: const Text(
+                'VIEW IN HISTORY',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                setState(() {
+                  _recordedRoutePoints.clear();
+                  _lastRecordedPoint = null;
+                });
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.grey.shade700,
+              ),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildPopupStatRow(String label, String value, IconData icon, Color color) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
   }
 
   void _cancelTracking() {
@@ -265,74 +420,6 @@ class _TrackScreenState extends ConsumerState<TrackScreen> {
 
     print('✅ Tracking cancelled');
     print('========== CANCEL BUTTON COMPLETE ==========\n');
-  }
-
-  void _showActivitySummary() {
-    final currentActivity = ref.read(currentActivityProvider);
-    if (currentActivity == null) {
-      print('⚠️ No activity to show summary for');
-      return;
-    }
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Activity Completed! 🎉'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildSummaryRow('Distance', _formatDistance(currentActivity.distance)),
-                const Divider(),
-                _buildSummaryRow('Duration', _formatDurationDetailed(currentActivity.duration)),
-                const Divider(),
-                _buildSummaryRow('Avg Speed', _formatSpeed(currentActivity.averageSpeed, currentActivity.type)),
-                const Divider(),
-                _buildSummaryRow('Calories', '${currentActivity.caloriesBurned} kcal'),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                setState(() {
-                  _recordedRoutePoints.clear();
-                  _lastRecordedPoint = null;
-                });
-                // Navigate to history tab to show saved activity
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Activity saved to history!'),
-                    duration: Duration(seconds: 2),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildSummaryRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
-          Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
-          ),
-        ],
-      ),
-    );
   }
 
   @override

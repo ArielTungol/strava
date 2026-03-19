@@ -6,7 +6,6 @@ part 'activity_provider.g.dart';
 
 @riverpod
 ActivityService activityService(ActivityServiceRef ref) {
-  print('📦 Creating ActivityService');
   return ActivityService();
 }
 
@@ -18,22 +17,10 @@ class CurrentActivity extends _$CurrentActivity {
   }
 
   void startNewActivity(String name, ActivityType type) {
-    print('\n========== PROVIDER: START ACTIVITY ==========');
-    print('📱 Name: $name');
-    print('📱 Type: $type');
-
-    try {
-      final service = ref.read(activityServiceProvider);
-      service.startNewActivity(name, type);
-
-      final newState = service.currentActivity;
-      state = newState;
-
-      print('📱 Activity started with ID: ${newState?.id}');
-      print('========== PROVIDER: START COMPLETE ==========\n');
-    } catch (e) {
-      print('❌ Provider error: $e');
-    }
+    print('📱 Starting new activity: $name');
+    final service = ref.read(activityServiceProvider);
+    service.startNewActivity(name, type);
+    state = service.currentActivity;
   }
 
   void updateActivity() {
@@ -42,47 +29,38 @@ class CurrentActivity extends _$CurrentActivity {
   }
 
   Future<void> finishActivity() async {
-    print('\n========== PROVIDER: FINISH ACTIVITY ==========');
-    print('📱 Current state before finish: ${state?.id}');
+    print('📱 Finish activity called');
 
     try {
       final service = ref.read(activityServiceProvider);
       await service.finishActivity();
-
-      print('📱 Setting state to null');
+      print('📱 Service finished activity');
       state = null;
 
-      print('📱 State set to null successfully');
-      print('========== PROVIDER: FINISH COMPLETE ==========\n');
+      // IMPORTANT: Invalidate the activities list so it refreshes
+      print('📱 Invalidating activities list...');
+      ref.invalidate(activitiesListProvider);
 
     } catch (e) {
-      print('❌ Provider error in finishActivity: $e');
+      print('📱 Error: $e');
       state = null;
     }
   }
 
   void cancelActivity() {
-    print('\n========== PROVIDER: CANCEL ACTIVITY ==========');
     final service = ref.read(activityServiceProvider);
     service.cancelActivity();
     state = null;
-    print('========== PROVIDER: CANCEL COMPLETE ==========\n');
   }
 }
 
 @riverpod
 Future<List<Activity>> activitiesList(ActivitiesListRef ref) async {
-  print('\n========== PROVIDER: FETCHING HISTORY ==========');
-  try {
-    final service = ref.watch(activityServiceProvider);
-    final activities = await service.getAllActivities();
-    print('📋 Provider returning ${activities.length} activities');
-    print('========== PROVIDER: FETCH COMPLETE ==========\n');
-    return activities;
-  } catch (e) {
-    print('❌ Provider error fetching history: $e');
-    return [];
-  }
+  print('📋 Fetching activities list');
+  final service = ref.watch(activityServiceProvider);
+  final activities = await service.getAllActivities();
+  print('📋 Found ${activities.length} activities');
+  return activities;
 }
 
 @riverpod
